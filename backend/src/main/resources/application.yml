@@ -1,0 +1,37 @@
+server:
+  port: 8899
+
+spring:
+  application:
+    name: tmam-backend
+
+tmam:
+  mode: native
+  config-path: ${user.home}/.tmam/projects.json
+  instances-root: ${user.home}/.tmam/instances
+  pids-root: ${user.home}/.tmam/pids
+  default-catalina-home: "C:/Program Files/apache-tomcat-9.0.115"
+  server-xml-backup: ${user.home}/.tmam/backups/server.xml.tmam-original
+  server-xml-fragments: ${user.home}/.tmam/server-fragments
+  native-catalina-base: ${user.home}/.tmam/native-tomcat
+  startup-timeout-sec: 90
+  app-log-path: ${user.home}/.tmam/logs/tmam-backend.log
+  nginx:
+    enabled: true
+    executable: "C:/nginx/nginx.exe"
+    config-path: ${user.home}/.tmam/nginx/nginx.conf
+    locations-fragment: ${user.home}/.tmam/nginx/tmam-locations.conf
+    listen-port: 80
+    upstream-host: 127.0.0.1
+    gateway-port: 8080
+  path-gateway:
+    service-name: PathGateway
+
+logging:
+  charset:
+    console: UTF-8
+    file: UTF-8
+  file:
+    name: ${tmam.app-log-path}
+  level:
+    com.tmam: DEBUG

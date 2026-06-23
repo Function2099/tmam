@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!-- Note:  A "Server" is not itself a "Container", so you may not
+     define subcomponents such as "Valves" at this level.
+     Documentation at /docs/config/server.html
+ -->
+<Server port="8005" shutdown="SHUTDOWN">
+  <Listener className="org.apache.catalina.startup.VersionLoggerListener" />
+  <!-- Security listener. Documentation at /docs/config/listeners.html
+  <Listener className="org.apache.catalina.security.SecurityListener" />
+  -->
+  <!-- APR connector and OpenSSL support using Tomcat Native -->
+  <Listener className="org.apache.catalina.core.AprLifecycleListener" />
+  <!-- OpenSSL support using FFM API from Java 22 -->
+  <!-- <Listener className="org.apache.catalina.core.OpenSSLLifecycleListener" /> -->
+  <!-- Prevent memory leaks due to use of particular java/javax APIs-->
+  <Listener className="org.apache.catalina.core.JreMemoryLeakPreventionListener" />
+  <Listener className="org.apache.catalina.mbeans.GlobalResourcesLifecycleListener" />
+  <Listener className="org.apache.catalina.core.ThreadLocalLeakPreventionListener" />
+
+  <!-- Global JNDI resources
+       Documentation at /docs/jndi-resources-howto.html
+  -->
+  <GlobalNamingResources>
+    <!-- Editable user database that can also be used by
+         UserDatabaseRealm to authenticate users
+    -->
+    <Resource name="UserDatabase" auth="Container"
+              type="org.apache.catalina.UserDatabase"
+              description="User database that can be updated and saved"
+              factory="org.apache.catalina.users.MemoryUserDatabaseFactory"
+              pathname="conf/tomcat-users.xml" />
+  </GlobalNamingResources>
+
+  <!-- A "Service" is a collection of one or more "Connectors" that share
+       a single "Container" Note:  A "Service" is not itself a "Container",
+       so you may not define subcomponents such as "Valves" at this level.
+       Documentation at /docs/config/service.html
+   -->
+   <Service name="Portal_Area">
+    <Connector URIEncoding="utf-8" address="192.168.10.10" port="36" protocol="HTTP/1.1" 
+      acceptCount="500"
+      useBodyEncodingForURI="true"
+      connectionUploadTimeout="36000000" 
+      disableUploadTimeout="false" maxSwallowSize="-1"
+                           maxThreads="500" 
+      connectionTimeout="20000" 
+      maxPostSize="-1"
+      maxHttpHeaderSize="8192" 
+      compression="on"
+      compressionMinSize="2048"
+      noCompressionUserAgents="gozilla, traviata"
+      compressibleMimeType="text/html,text/xml"
+      relaxedPathChars="|{}[],"    
+      relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+			   
+    <Engine name="Portal_Area" defaultHost="Portal_Area"> 
+      <Realm  className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal_Area"  unpackWARs="true" autoDeploy="true" >     
+             <Context sessionCookieName="cloudSessionId" path="" docBase="D:\Work_Java\Portal_Area\web" reloadable="true" crossContext="true" >
+    <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+    <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"  prefix="Cloud_access_log_all." suffix=".txt" pattern="%h %l %u %t &quot;%r&quot; %s %b" />   
+    </Context>  
+ 
+      </Host>      
+    </Engine>    
+  </Service>
+  
+   <Service name="Loc">
+    <Connector URIEncoding="utf-8" address="192.168.10.11" port="34" protocol="HTTP/1.1" 
+      acceptCount="500"
+      useBodyEncodingForURI="true"
+      connectionUploadTimeout="36000000" 
+      disableUploadTimeout="false" maxSwallowSize="-1" 
+                           maxThreads="500" 
+      connectionTimeout="20000" 
+      maxPostSize="-1"
+      maxHttpHeaderSize="8192" 
+      compression="on"
+      compressionMinSize="2048"
+      noCompressionUserAgents="gozilla, traviata"
+      compressibleMimeType="text/html,text/xml"
+      relaxedPathChars="|{}[],"    
+      relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+			   
+    <Engine name="Loc" defaultHost="Loc"> 
+      <Realm  className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Loc"  unpackWARs="true" autoDeploy="true" >     
+             <Context sessionCookieName="cloudSessionId" path="" docBase="D:\Work_Java\Loc\web" reloadable="true" crossContext="true" >
+    <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+    <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"  prefix="Cloud_access_log_all." suffix=".txt" pattern="%h %l %u %t &quot;%r&quot; %s %b" />   
+    </Context>  
+ 
+      </Host>      
+    </Engine>    
+  </Service>
+  
+   <Service name="Portal_Sport">
+    <Connector URIEncoding="utf-8" address="192.168.10.12" port="35" protocol="HTTP/1.1" 
+      acceptCount="500"
+      useBodyEncodingForURI="true"
+      connectionUploadTimeout="36000000" 
+      disableUploadTimeout="false" maxSwallowSize="-1" 
+                           maxThreads="500" 
+      connectionTimeout="20000" 
+      maxPostSize="-1"
+      maxHttpHeaderSize="8192" 
+      compression="on"
+      compressionMinSize="2048"
+      noCompressionUserAgents="gozilla, traviata"
+      compressibleMimeType="text/html,text/xml"
+      relaxedPathChars="|{}[],"    
+      relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+			   
+    <Engine name="Portal_Sport" defaultHost="Portal_Sport"> 
+      <Realm  className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal_Sport"  unpackWARs="true" autoDeploy="true" >     
+             <Context sessionCookieName="cloudSessionId" path="" docBase="D:\Work_Java\Portal_Sport\web" reloadable="true" crossContext="true" >
+    <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+    <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"  prefix="Cloud_access_log_all." suffix=".txt" pattern="%h %l %u %t &quot;%r&quot; %s %b" />   
+    </Context>  
+ 
+      </Host>      
+    </Engine>    
+  </Service>
+  
+   <Service name="Portal">
+    <Connector URIEncoding="utf-8" address="192.168.10.13" port="33" protocol="HTTP/1.1" 
+      acceptCount="500"
+      useBodyEncodingForURI="true"
+      connectionUploadTimeout="36000000" 
+      disableUploadTimeout="false" maxSwallowSize="-1" 
+                           maxThreads="500" 
+      connectionTimeout="20000" 
+      maxPostSize="-1"
+      maxHttpHeaderSize="8192" 
+      compression="on"
+      compressionMinSize="2048"
+      noCompressionUserAgents="gozilla, traviata"
+      compressibleMimeType="text/html,text/xml"
+      relaxedPathChars="|{}[],"    
+      relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+			   
+    <Engine name="Portal" defaultHost="Portal"> 
+      <Realm  className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal"  unpackWARs="true" autoDeploy="true" >     
+             <Context sessionCookieName="cloudSessionId" path="" docBase="D:\Work_Java\Portal\web" reloadable="true" crossContext="true" >
+    <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+    <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"  prefix="Cloud_access_log_all." suffix=".txt" pattern="%h %l %u %t &quot;%r&quot; %s %b" />   
+    </Context>  
+ 
+      </Host>      
+    </Engine>    
+  </Service>
+  
+   <Service name="Portal_Execute">
+    <Connector URIEncoding="utf-8" 
+               address="192.168.10.14" 
+               port="80" 
+               protocol="HTTP/1.1"  
+               acceptCount="500"
+               useBodyEncodingForURI="true"
+               connectionUploadTimeout="36000000" 
+               disableUploadTimeout="false" 
+               maxSwallowSize="-1" 
+               maxThreads="500" 
+               connectionTimeout="20000" 
+               maxPostSize="-1"
+               maxHttpHeaderSize="8192" 
+               compression="on"
+               compressionMinSize="2048"
+               noCompressionUserAgents="gozilla, traviata"
+               compressibleMimeType="text/html,text/xml"
+               relaxedPathChars="|{}[],"    
+               relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+               
+    <Engine name="Portal_Execute" defaultHost="Portal_Execute"> 
+      <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal_Execute" unpackWARs="true" autoDeploy="true">      
+        <Context sessionCookieName="newServiceSessionId" 
+                 path="" 
+                 docBase="D:\Work_Java\Portal_Execute\web" 
+                 reloadable="true"  
+                 crossContext="true">
+          <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+          <Valve className="org.apache.catalina.valves.AccessLogValve" 
+                 directory="logs"  
+                 prefix="NewService_access_log." 
+                 suffix=".txt" 
+                 pattern="%h %l %u %t &quot;%r&quot; %s %b" />    
+        </Context>  
+      </Host>      
+    </Engine>    
+  </Service>
+  
+  <Service name="Loc_RT">
+    <Connector URIEncoding="utf-8" 
+               address="192.168.10.15" 
+               port="39" 
+               protocol="HTTP/1.1"  
+               acceptCount="500"
+               useBodyEncodingForURI="true"
+               connectionUploadTimeout="36000000" 
+               disableUploadTimeout="false" 
+               maxSwallowSize="-1" 
+               maxThreads="500" 
+               connectionTimeout="20000" 
+               maxPostSize="-1"
+               maxHttpHeaderSize="8192" 
+               compression="on"
+               compressionMinSize="2048"
+               noCompressionUserAgents="gozilla, traviata"
+               compressibleMimeType="text/html,text/xml"
+               relaxedPathChars="|{}[],"    
+               relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+               
+    <Engine name="Loc_RT" defaultHost="Loc_RT"> 
+      <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Loc_RT" unpackWARs="true" autoDeploy="true">      
+        <Context sessionCookieName="newServiceSessionId" 
+                 path="" 
+                 docBase="D:\Work_Java\Loc_RT\web" 
+                 reloadable="true"  
+                 crossContext="true">
+          <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+          <Valve className="org.apache.catalina.valves.AccessLogValve" 
+                 directory="logs"  
+                 prefix="NewService_access_log." 
+                 suffix=".txt" 
+                 pattern="%h %l %u %t &quot;%r&quot; %s %b" />    
+        </Context>  
+      </Host>      
+    </Engine>    
+  </Service>
+  <Service name="Portal_IOT">
+    <Connector URIEncoding="utf-8" 
+               address="192.168.10.16" 
+               port="40" 
+               protocol="HTTP/1.1"  
+               acceptCount="500"
+               useBodyEncodingForURI="true"
+               connectionUploadTimeout="36000000" 
+               disableUploadTimeout="false" 
+               maxSwallowSize="-1" 
+               maxThreads="500" 
+               connectionTimeout="20000" 
+               maxPostSize="-1"
+               maxHttpHeaderSize="8192" 
+               compression="on"
+               compressionMinSize="2048"
+               noCompressionUserAgents="gozilla, traviata"
+               compressibleMimeType="text/html,text/xml"
+               relaxedPathChars="|{}[],"    
+               relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+               
+    <Engine name="Portal_IOT" defaultHost="Portal_IOT"> 
+      <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal_IOT" unpackWARs="true" autoDeploy="true">      
+        <Context sessionCookieName="newServiceSessionId" 
+                 path="" 
+                 docBase="D:\Work_Java\Portal_IOT\web" 
+                 reloadable="true"  
+                 crossContext="true">
+          <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+          <Valve className="org.apache.catalina.valves.AccessLogValve" 
+                 directory="logs"  
+                 prefix="NewService_access_log." 
+                 suffix=".txt" 
+                 pattern="%h %l %u %t &quot;%r&quot; %s %b" />    
+        </Context>  
+      </Host>      
+    </Engine>    
+  </Service>
+  <Service name="Portal_IOT_Front">
+    <Connector URIEncoding="utf-8" 
+               address="192.168.10.17" 
+               port="41" 
+               protocol="HTTP/1.1"  
+               acceptCount="500"
+               useBodyEncodingForURI="true"
+               connectionUploadTimeout="36000000" 
+               disableUploadTimeout="false" 
+               maxSwallowSize="-1" 
+               maxThreads="500" 
+               connectionTimeout="20000" 
+               maxPostSize="-1"
+               maxHttpHeaderSize="8192" 
+               compression="on"
+               compressionMinSize="2048"
+               noCompressionUserAgents="gozilla, traviata"
+               compressibleMimeType="text/html,text/xml"
+               relaxedPathChars="|{}[],"    
+               relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+               
+    <Engine name="Portal_IOT_Front" defaultHost="Portal_IOT_Front"> 
+      <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal_IOT_Front" unpackWARs="true" autoDeploy="true">      
+        <Context sessionCookieName="newServiceSessionId" 
+                 path="" 
+                 docBase="D:\Work_Java\Portal_IOT_Front\web" 
+                 reloadable="true"  
+                 crossContext="true">
+          <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+          <Valve className="org.apache.catalina.valves.AccessLogValve" 
+                 directory="logs"  
+                 prefix="NewService_access_log." 
+                 suffix=".txt" 
+                 pattern="%h %l %u %t &quot;%r&quot; %s %b" />    
+        </Context>  
+      </Host>      
+    </Engine>    
+  </Service>
+  
+  <Service name="Portal_CTSP">
+    <Connector URIEncoding="utf-8" 
+               address="192.168.10.19" 
+               port="8042" 
+               protocol="HTTP/1.1"  
+               acceptCount="500"
+               useBodyEncodingForURI="true"
+               connectionUploadTimeout="36000000" 
+               disableUploadTimeout="false" 
+               maxSwallowSize="-1" 
+               maxThreads="500" 
+               connectionTimeout="20000" 
+               maxPostSize="-1"
+               maxHttpHeaderSize="8192" 
+               compression="on"
+               compressionMinSize="2048"
+               noCompressionUserAgents="gozilla, traviata"
+               compressibleMimeType="text/html,text/xml"
+               relaxedPathChars="|{}[],"    
+               relaxedQueryChars="|{}[],^&#x5c;&#x60;&quot;&lt;&gt;"
+               redirectPort="443" />
+               
+    <Engine name="Portal_CTSP" defaultHost="Portal_CTSP"> 
+      <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/> 
+      <Host name="Portal_CTSP" unpackWARs="true" autoDeploy="true">      
+        <Context sessionCookieName="newServiceSessionId" 
+                 path="" 
+                 docBase="D:\Work_Java\Portal_CTSP\web" 
+                 reloadable="true"  
+                 crossContext="true">
+          <Resources cachingAllowed="false" cacheMaxSize="100000"/> 
+          <Valve className="org.apache.catalina.valves.AccessLogValve" 
+                 directory="logs"  
+                 prefix="NewService_access_log." 
+                 suffix=".txt" 
+                 pattern="%h %l %u %t &quot;%r&quot; %s %b" />    
+        </Context>  
+      </Host>      
+    </Engine>    
+  </Service>
+</Server>

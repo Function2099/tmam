@@ -1,0 +1,65 @@
+{
+  "name": "tmam-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TMAM - Tomcat Multi-Instance Manager",
+  "author": "TMAM",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron:dev": "electron .",
+    "electron:dev:full": "node ../scripts/electron-dev.cjs",
+    "sync:static": "node ../scripts/sync-static.cjs",
+    "package:backend": "cd ../backend && mvnw.cmd package -DskipTests -q",
+    "build:desktop": "node ../scripts/build-desktop.cjs",
+    "electron:build": "electron-builder --win"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "element-plus": "^2.7.0",
+    "pinia": "^2.2.0",
+    "vue": "^3.5.34",
+    "vue-router": "^4.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.6",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.0",
+    "vite": "^8.0.12"
+  },
+  "build": {
+    "appId": "com.tmam.desktop",
+    "productName": "TMAM",
+    "directories": {
+      "output": "../build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/target/tmam-backend-0.0.1-SNAPSHOT.jar",
+        "to": "backend.jar"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

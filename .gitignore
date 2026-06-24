@@ -11,6 +11,7 @@ frontend/dist/
 # Build output
 build/
 build1/
+TMAM_開發實施計畫書_v2.md
 
 # Runtime data
 .tmam/

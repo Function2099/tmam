@@ -21,6 +21,8 @@ function run(command, args, cwd) {
 }
 
 async function main() {
+  const outputDir = process.argv[2] || 'build'
+
   console.log('[build-desktop] 1/4 Building frontend...')
   await run('npm', ['run', 'build'], frontendDir)
 
@@ -30,10 +32,14 @@ async function main() {
   console.log('[build-desktop] 3/4 Packaging backend JAR...')
   await run(mvnw, ['package', '-DskipTests', '-q'], backendDir)
 
-  console.log('[build-desktop] 4/4 Building Electron app...')
-  await run('npx', ['electron-builder', '--win'], frontendDir)
+  console.log(`[build-desktop] 4/4 Building Electron app (output: ${outputDir}/)...`)
+  await run(
+    'npx',
+    ['electron-builder', '--win', `--config.directories.output=../${outputDir}`],
+    frontendDir
+  )
 
-  console.log('[build-desktop] Done. Output: build/')
+  console.log(`[build-desktop] Done. Output: ${outputDir}/`)
 }
 
 main().catch((error) => {

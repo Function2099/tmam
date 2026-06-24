@@ -2,8 +2,8 @@
   <div class="logs-view">
     <div class="logs-header">
       <div>
-        <el-button link @click="$router.push('/')">← 返回</el-button>
-        <h2>Log 檢視</h2>
+        <el-button link @click="$router.push(`/tomcats/${tomcatId}`)">← 返回 Service 管理</el-button>
+        <h2>Log 檢視 — {{ tomcatId }}</h2>
       </div>
       <div class="logs-actions">
         <el-switch v-model="autoRefresh" active-text="自動更新" />
@@ -28,7 +28,11 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { tomcatApi } from '@/api/tmam'
+import { useRoute } from 'vue-router'
+import { tomcatApi, tomcatsApi } from '@/api/tmam'
+
+const route = useRoute()
+const tomcatId = computed(() => route.params.tomcatId)
 
 const lines = ref([])
 const loading = ref(false)
@@ -60,8 +64,10 @@ async function loadLogs() {
 
   loading.value = true
   try {
-    const apiCall = activeTab.value === 'app' ? tomcatApi.appLogs : tomcatApi.logs
-    const { data } = await apiCall(lineCount.value)
+    const apiCall = activeTab.value === 'app'
+      ? () => tomcatApi.appLogs(lineCount.value)
+      : () => tomcatsApi.logs(tomcatId.value, lineCount.value)
+    const { data } = await apiCall()
     lines.value = Array.isArray(data) ? data : []
     loadError.value = ''
     await nextTick()
@@ -70,8 +76,8 @@ async function loadLogs() {
     }
   } catch {
     loadError.value = activeTab.value === 'app'
-      ? '無法載入 TMAM 後端日誌，請確認後端正在運行'
-      : '無法載入 Tomcat 日誌，請確認 Tomcat 與後端正在運行'
+      ? '無法載入 TMAM 後端日誌'
+      : '無法載入 Tomcat 日誌'
     if (lines.value.length === 0) {
       lines.value = [loadError.value]
     }
@@ -79,6 +85,8 @@ async function loadLogs() {
     loading.value = false
   }
 }
+
+watch(tomcatId, () => loadLogs())
 
 watch(autoRefresh, (enabled) => {
   if (enabled) {

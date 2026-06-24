@@ -15,6 +15,7 @@ public class TomcatServiceConfig {
 	private String pathPrefix;
 	private String docBase;
 	private boolean proxyStripPrefix = false;
+	private boolean userCreated = false;
 
 	public String getName() {
 		return name;
@@ -86,6 +87,14 @@ public class TomcatServiceConfig {
 
 	public void setProxyStripPrefix(boolean proxyStripPrefix) {
 		this.proxyStripPrefix = proxyStripPrefix;
+	}
+
+	public boolean isUserCreated() {
+		return userCreated;
+	}
+
+	public void setUserCreated(boolean userCreated) {
+		this.userCreated = userCreated;
 	}
 
 	@JsonIgnore

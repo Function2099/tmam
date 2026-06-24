@@ -10,6 +10,7 @@ frontend/dist/
 
 # Build output
 build/
+build1/
 
 # Runtime data
 .tmam/

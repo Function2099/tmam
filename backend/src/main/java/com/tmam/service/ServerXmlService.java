@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -31,21 +33,16 @@ public class ServerXmlService {
 	private static final Logger log = LoggerFactory.getLogger(ServerXmlService.class);
 
 	private static final String HEADER_FILE = "server-header.xml";
+	private static final Pattern SERVER_PORT_PATTERN = Pattern.compile("<Server\\s+port=\"(\\d+)\"");
 
 	private final String defaultCatalinaHome;
-	private final String serverXmlBackupRelative;
-	private final String fragmentsRoot;
 	private final String pathGatewayServiceName;
 	private final NativeTomcatEnvironmentService nativeTomcatEnvironmentService;
 
 	public ServerXmlService(@Value("${tmam.default-catalina-home}") String defaultCatalinaHome,
-			@Value("${tmam.server-xml-backup:conf/server.xml.tmam-original}") String serverXmlBackupRelative,
-			@Value("${tmam.server-xml-fragments}") String fragmentsRoot,
 			@Value("${tmam.path-gateway.service-name:PathGateway}") String pathGatewayServiceName,
 			NativeTomcatEnvironmentService nativeTomcatEnvironmentService) {
 		this.defaultCatalinaHome = defaultCatalinaHome;
-		this.serverXmlBackupRelative = serverXmlBackupRelative;
-		this.fragmentsRoot = fragmentsRoot;
 		this.pathGatewayServiceName = pathGatewayServiceName;
 		this.nativeTomcatEnvironmentService = nativeTomcatEnvironmentService;
 	}
@@ -61,27 +58,21 @@ public class ServerXmlService {
 		return resolveCatalinaHome(catalinaHome).resolve("conf/server.xml");
 	}
 
-	/** 可寫入的 server.xml（CATALINA_BASE），避免寫入 Program Files。 */
-	public Path effectiveServerXmlPath(String catalinaHome) throws IOException {
-		nativeTomcatEnvironmentService.ensureInitialized(resolveCatalinaHome(catalinaHome).toString());
-		return nativeTomcatEnvironmentService.getNativeCatalinaBase().resolve("conf/server.xml");
+	public Path effectiveServerXmlPath(String instanceId) throws IOException {
+		return nativeTomcatEnvironmentService.getCatalinaBase(instanceId).resolve("conf/server.xml");
 	}
 
-	public Path backupPath(String catalinaHome) {
-		Path configured = Path.of(serverXmlBackupRelative);
-		if (configured.isAbsolute()) {
-			return configured;
-		}
-		return resolveCatalinaHome(catalinaHome).resolve(serverXmlBackupRelative);
+	public Path backupPath(String instanceId, String catalinaHome) {
+		return nativeTomcatEnvironmentService.getBackupDir(instanceId).resolve("server.xml.tmam-original");
 	}
 
-	public Path fragmentsDir() {
-		return Path.of(fragmentsRoot);
+	public Path fragmentsDir(String instanceId) {
+		return nativeTomcatEnvironmentService.getFragmentsDir(instanceId);
 	}
 
-	public void backupOriginalIfNeeded(String catalinaHome) throws IOException {
+	public void backupOriginalIfNeeded(String instanceId, String catalinaHome) throws IOException {
 		Path serverXml = serverXmlPath(catalinaHome);
-		Path backup = backupPath(catalinaHome);
+		Path backup = backupPath(instanceId, catalinaHome);
 		if (!Files.exists(serverXml)) {
 			throw new IOException("server.xml not found: " + serverXml);
 		}
@@ -91,8 +82,21 @@ public class ServerXmlService {
 		}
 	}
 
-	public List<TomcatServiceConfig> importFromServerXml(String catalinaHome) throws Exception {
-		backupOriginalIfNeeded(catalinaHome);
+	public int readShutdownPortFromHeader(String instanceId) throws IOException {
+		Path headerFile = fragmentsDir(instanceId).resolve(HEADER_FILE);
+		if (!Files.exists(headerFile)) {
+			return 8005;
+		}
+		String header = Files.readString(headerFile);
+		Matcher matcher = SERVER_PORT_PATTERN.matcher(header);
+		if (matcher.find()) {
+			return Integer.parseInt(matcher.group(1));
+		}
+		return 8005;
+	}
+
+	public List<TomcatServiceConfig> importFromServerXml(String instanceId, String catalinaHome) throws Exception {
+		backupOriginalIfNeeded(instanceId, catalinaHome);
 		Path serverXml = serverXmlPath(catalinaHome);
 		String content = Files.readString(serverXml);
 
@@ -101,9 +105,10 @@ public class ServerXmlService {
 			throw new IOException("No <Service> elements found in server.xml");
 		}
 
-		Files.createDirectories(fragmentsDir());
+		Path fragments = fragmentsDir(instanceId);
+		Files.createDirectories(fragments);
 		String header = content.substring(0, firstService).stripTrailing();
-		Files.writeString(fragmentsDir().resolve(HEADER_FILE), header);
+		Files.writeString(fragments.resolve(HEADER_FILE), header);
 
 		List<TomcatServiceConfig> imported = new ArrayList<>();
 		int position = firstService;
@@ -120,75 +125,80 @@ public class ServerXmlService {
 				position = indexOfServiceTag(content, serviceEnd);
 				continue;
 			}
-			Files.writeString(fragmentsDir().resolve(service.getName() + ".xml"), fragment);
+			Files.writeString(fragments.resolve(service.getName() + ".xml"), fragment);
 			imported.add(service);
 			position = indexOfServiceTag(content, serviceEnd);
 		}
 		return imported;
 	}
 
-	public void writeEffectiveServerXml(String catalinaHome, Map<String, TomcatServiceConfig> services)
-			throws IOException {
-		log.info("[writeEffectiveServerXml] 開始組裝 server.xml, catalinaHome={}", catalinaHome);
+	public void writeServiceFragment(String instanceId, String serviceName, String fragment) throws IOException {
+		Path fragments = fragmentsDir(instanceId);
+		Files.createDirectories(fragments);
+		Files.writeString(fragments.resolve(serviceName + ".xml"), fragment);
+	}
+
+	public void deleteServiceFragment(String instanceId, String serviceName) throws IOException {
+		Files.deleteIfExists(fragmentsDir(instanceId).resolve(serviceName + ".xml"));
+	}
+
+	public void writeEffectiveServerXml(String instanceId, String catalinaHome,
+			Map<String, TomcatServiceConfig> services) throws IOException {
+		log.info("[writeEffectiveServerXml] instance={}, catalinaHome={}", instanceId, catalinaHome);
 		boolean hasEnabledLegacy = services.values().stream()
 				.anyMatch(service -> service.isLegacyIp() && service.isEnabled());
 		boolean hasEnabledPathProxy = services.values().stream()
 				.anyMatch(service -> service.isPathProxy() && service.isEnabled());
 		if (!hasEnabledLegacy && !hasEnabledPathProxy) {
-			log.warn("[writeEffectiveServerXml] 失敗：沒有啟用的 Service");
 			throw new IllegalArgumentException("至少需要啟用一個 Service");
 		}
 
-		Path headerFile = fragmentsDir().resolve(HEADER_FILE);
+		Path headerFile = fragmentsDir(instanceId).resolve(HEADER_FILE);
 		if (!Files.exists(headerFile)) {
-			log.error("[writeEffectiveServerXml] 失敗：找不到 header 片段 {}", headerFile);
 			throw new IOException("Service fragments not imported. Run import first.");
 		}
-		log.debug("[writeEffectiveServerXml] 讀取 header: {}", headerFile);
 
 		StringBuilder content = new StringBuilder(Files.readString(headerFile)).append("\n");
 		for (TomcatServiceConfig service : services.values()) {
 			if (!service.isLegacyIp() || !service.isEnabled()) {
 				continue;
 			}
-			Path fragmentFile = fragmentsDir().resolve(service.getName() + ".xml");
+			Path fragmentFile = fragmentsDir(instanceId).resolve(service.getName() + ".xml");
 			if (!Files.exists(fragmentFile)) {
-				log.error("[writeEffectiveServerXml] 失敗：找不到片段 {}", fragmentFile);
 				throw new IOException("Missing service fragment: " + service.getName());
 			}
-			log.debug("[writeEffectiveServerXml] 加入 LEGACY_IP 片段: {}", fragmentFile);
 			content.append(Files.readString(fragmentFile)).append("\n");
 		}
 
 		if (hasEnabledPathProxy) {
-			Path gatewayFragment = fragmentsDir().resolve(pathGatewayServiceName + ".xml");
+			Path gatewayFragment = fragmentsDir(instanceId).resolve(pathGatewayServiceName + ".xml");
 			if (!Files.exists(gatewayFragment)) {
 				throw new IOException("Missing PathGateway fragment. Add PATH_PROXY services first.");
 			}
-			log.debug("[writeEffectiveServerXml] 加入 PathGateway 片段: {}", gatewayFragment);
 			content.append(Files.readString(gatewayFragment)).append("\n");
 		}
 
 		content.append("</Server>\n");
 
-		Path target = effectiveServerXmlPath(catalinaHome);
+		nativeTomcatEnvironmentService.ensureInitialized(instanceId, catalinaHome);
+		Path target = effectiveServerXmlPath(instanceId);
 		Files.createDirectories(target.getParent());
 		Files.writeString(target, content.toString());
 		log.info("[writeEffectiveServerXml] 已寫入 {}, 大小 {} bytes", target, content.length());
 	}
 
-	public void restoreOriginal(String catalinaHome) throws IOException {
-		Path backup = backupPath(catalinaHome);
+	public void restoreOriginal(String instanceId, String catalinaHome) throws IOException {
+		Path backup = backupPath(instanceId, catalinaHome);
 		if (!Files.exists(backup)) {
 			throw new IOException("Backup not found: " + backup);
 		}
-		Path target = effectiveServerXmlPath(catalinaHome);
+		Path target = effectiveServerXmlPath(instanceId);
 		Files.copy(backup, target, StandardCopyOption.REPLACE_EXISTING);
 		log.info("[restoreOriginal] 已還原 {} -> {}", backup, target);
 	}
 
-	public boolean hasImportedFragments() {
-		return Files.exists(fragmentsDir().resolve(HEADER_FILE));
+	public boolean hasImportedFragments(String instanceId) {
+		return Files.exists(fragmentsDir(instanceId).resolve(HEADER_FILE));
 	}
 
 	public Map<String, TomcatServiceConfig> mergeImportedServices(List<TomcatServiceConfig> imported,
@@ -205,6 +215,9 @@ public class ServerXmlService {
 				service.setPathPrefix(previous.getPathPrefix());
 				service.setDocBase(previous.getDocBase());
 				service.setProxyStripPrefix(previous.isProxyStripPrefix());
+				if (previous.isUserCreated()) {
+					service.setUserCreated(true);
+				}
 			}
 			else {
 				service.setDisplayName(service.getName());
@@ -213,7 +226,7 @@ public class ServerXmlService {
 			merged.put(service.getName(), service);
 		}
 		for (TomcatServiceConfig service : existing.values()) {
-			if (service.isPathProxy()) {
+			if (service.isPathProxy() || service.isUserCreated()) {
 				merged.put(service.getName(), service);
 			}
 		}
@@ -237,11 +250,15 @@ public class ServerXmlService {
 		config.setAddress(connector.address());
 		config.setPort(connector.port());
 		config.setEnabled(true);
+		if (connector.docBase() != null) {
+			config.setDocBase(connector.docBase());
+		}
 		return config;
 	}
 
 	private ConnectorInfo extractHttpConnector(Element service) throws IOException {
 		NodeList connectors = service.getElementsByTagName("Connector");
+		String docBase = extractDocBase(service);
 		for (int i = 0; i < connectors.getLength(); i++) {
 			Element connector = (Element) connectors.item(i);
 			String protocol = connector.getAttribute("protocol");
@@ -254,10 +271,20 @@ public class ServerXmlService {
 				if (address == null || address.isBlank()) {
 					address = "0.0.0.0";
 				}
-				return new ConnectorInfo(address, Integer.parseInt(portValue));
+				return new ConnectorInfo(address, Integer.parseInt(portValue), docBase);
 			}
 		}
 		throw new IOException("No HTTP Connector found in service: " + service.getAttribute("name"));
+	}
+
+	private String extractDocBase(Element service) {
+		NodeList contexts = service.getElementsByTagName("Context");
+		if (contexts.getLength() == 0) {
+			return null;
+		}
+		Element context = (Element) contexts.item(0);
+		String docBase = context.getAttribute("docBase");
+		return docBase.isBlank() ? null : docBase;
 	}
 
 	private int indexOfServiceTag(String content, int fromIndex) {
@@ -276,7 +303,7 @@ public class ServerXmlService {
 		return -1;
 	}
 
-	private record ConnectorInfo(String address, int port) {
+	private record ConnectorInfo(String address, int port, String docBase) {
 	}
 
 }

@@ -40,9 +40,9 @@ public class TomcatController {
 	}
 
 	@GetMapping("/meta")
-	public Map<String, String> meta() throws Exception {
+	public Map<String, Object> meta() throws Exception {
 		tomcatManagementService.ensureReady();
-		return Map.of("mode", "native");
+		return Map.of("mode", "native", "multiTomcat", true);
 	}
 
 	@GetMapping("/services")

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import com.tmam.model.PortConfig;
 import com.tmam.model.PortConflict;
 import com.tmam.model.ProjectConfig;
 import com.tmam.model.TmamConfig;
+import com.tmam.model.TomcatInstanceConfig;
 
 class ConfigServiceTest {
 
@@ -31,33 +33,40 @@ class ConfigServiceTest {
 		XmlConfiguratorService xmlConfiguratorService = new XmlConfiguratorService(
 				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
-				tempDir.resolve("native-base").toString(), xmlConfiguratorService);
+				tempDir.resolve("instances").toString(), xmlConfiguratorService);
 		ServerXmlService serverXmlService = new ServerXmlService(
 				"C:/Program Files/apache-tomcat-9.0.115",
-				"conf/server.xml.tmam-original",
-				tempDir.resolve("fragments").toString(),
 				"PathGateway",
 				nativeTomcatEnvironmentService);
-		configService = new ConfigService(serverXmlService);
+		ConfigMigrationService migrationService = new ConfigMigrationService(
+				tempDir.resolve("projects.json").toString(),
+				tempDir.resolve("instances").toString(),
+				tempDir.resolve("fragments").toString(),
+				tempDir.resolve("native-base").toString(),
+				"C:/Program Files/apache-tomcat-9.0.115");
+		configService = new ConfigService(serverXmlService, migrationService);
 		ReflectionTestUtils.setField(configService, "configPath",
 				tempDir.resolve("projects.json").toString());
-		ReflectionTestUtils.setField(configService, "defaultCatalinaHome",
-				"C:/Program Files/apache-tomcat-9.0.115");
 	}
 
 	@Test
-	void loadCreatesDefaultConfigWhenMissing() throws IOException {
+	void loadCreatesEmptyConfigWhenMissing() throws IOException {
 		TmamConfig config = configService.load();
 
-		assertEquals("1.0.0", config.getVersion());
-		assertEquals("C:/Program Files/apache-tomcat-9.0.115", config.getCatalinaHome());
+		assertEquals(TmamConfig.VERSION_2, config.getVersion());
+		assertTrue(config.getTomcatInstances().isEmpty());
 		assertTrue(Files.exists(tempDir.resolve("projects.json")));
 	}
 
 	@Test
 	void saveAndLoadRoundTrip() throws IOException {
 		TmamConfig config = new TmamConfig();
-		config.setCatalinaHome("C:/tomcat");
+		config.setVersion(TmamConfig.VERSION_2);
+		TomcatInstanceConfig instance = new TomcatInstanceConfig();
+		instance.setId(TomcatInstanceConfig.DEFAULT_ID);
+		instance.setCatalinaHome("C:/tomcat");
+		instance.setDisplayName("tomcat");
+		config.getTomcatInstances().put(TomcatInstanceConfig.DEFAULT_ID, instance);
 
 		ProjectConfig project = new ProjectConfig();
 		project.setDisplayName("CRM");
@@ -113,6 +122,37 @@ class ConfigServiceTest {
 		config.getProjects().put("project-b", project("b", 8082, 8015, 8019));
 
 		assertTrue(configService.detectPortConflicts(config).isEmpty());
+	}
+
+	@Test
+	void loadRemovesDuplicateTomcatInstancesWithSameCatalinaHome() throws IOException {
+		TmamConfig config = new TmamConfig();
+		config.setVersion(TmamConfig.VERSION_2);
+		Map<String, TomcatInstanceConfig> instances = new LinkedHashMap<>();
+
+		TomcatInstanceConfig defaultInstance = new TomcatInstanceConfig();
+		defaultInstance.setId(TomcatInstanceConfig.DEFAULT_ID);
+		defaultInstance.setCatalinaHome("C:/Program Files/apache-tomcat-9.0.115");
+		defaultInstance.setDisplayName("apache-tomcat-9.0.115");
+		defaultInstance.setGatewayPort(8080);
+		defaultInstance.setShutdownPort(8005);
+		instances.put(TomcatInstanceConfig.DEFAULT_ID, defaultInstance);
+
+		TomcatInstanceConfig duplicate = new TomcatInstanceConfig();
+		duplicate.setId("apache-tomcat-9_0_115");
+		duplicate.setCatalinaHome("C:\\Program Files\\apache-tomcat-9.0.115");
+		duplicate.setDisplayName("apache-tomcat-9.0.115");
+		duplicate.setGatewayPort(8081);
+		duplicate.setShutdownPort(8006);
+		instances.put("apache-tomcat-9_0_115", duplicate);
+
+		config.setTomcatInstances(instances);
+		configService.save(config);
+
+		TmamConfig loaded = configService.load();
+
+		assertEquals(1, loaded.getTomcatInstances().size());
+		assertTrue(loaded.getTomcatInstances().containsKey(TomcatInstanceConfig.DEFAULT_ID));
 	}
 
 	private ProjectConfig project(String displayName, int http, int shutdown, int ajp) {

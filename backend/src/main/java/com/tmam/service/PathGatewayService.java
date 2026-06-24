@@ -22,56 +22,51 @@ public class PathGatewayService {
 
 	private final String serviceName;
 	private final String upstreamHost;
-	private final int gatewayPort;
-	private final String fragmentsRoot;
+	private final NativeTomcatEnvironmentService nativeTomcatEnvironmentService;
 
 	public PathGatewayService(
 			@Value("${tmam.path-gateway.service-name:PathGateway}") String serviceName,
 			@Value("${tmam.nginx.upstream-host:127.0.0.1}") String upstreamHost,
-			@Value("${tmam.nginx.gateway-port:8080}") int gatewayPort,
-			@Value("${tmam.server-xml-fragments}") String fragmentsRoot) {
+			NativeTomcatEnvironmentService nativeTomcatEnvironmentService) {
 		this.serviceName = serviceName;
 		this.upstreamHost = upstreamHost;
-		this.gatewayPort = gatewayPort;
-		this.fragmentsRoot = fragmentsRoot;
+		this.nativeTomcatEnvironmentService = nativeTomcatEnvironmentService;
 	}
 
 	public String getServiceName() {
 		return serviceName;
 	}
 
-	public int getGatewayPort() {
-		return gatewayPort;
-	}
-
 	public String getUpstreamHost() {
 		return upstreamHost;
 	}
 
-	public Path fragmentPath() {
-		return Path.of(fragmentsRoot).resolve(serviceName + ".xml");
+	public Path fragmentPath(String instanceId) {
+		return nativeTomcatEnvironmentService.getFragmentsDir(instanceId).resolve(serviceName + ".xml");
 	}
 
-	public void writeFragment(Collection<TomcatServiceConfig> services) throws IOException {
+	public void writeFragment(String instanceId, int gatewayPort, Collection<TomcatServiceConfig> services)
+			throws IOException {
 		List<TomcatServiceConfig> enabled = services.stream()
 				.filter(service -> service.getType() == TomcatServiceType.PATH_PROXY && service.isEnabled())
 				.collect(Collectors.toList());
 
-		Path target = fragmentPath();
+		Path target = fragmentPath(instanceId);
 		Files.createDirectories(target.getParent());
 
 		if (enabled.isEmpty()) {
 			Files.deleteIfExists(target);
-			log.info("[writeFragment] 無啟用的 PATH_PROXY，已移除 {}", target);
+			log.info("[writeFragment] instance={} 無啟用的 PATH_PROXY，已移除 {}", instanceId, target);
 			return;
 		}
 
-		String fragment = buildFragment(enabled);
+		String fragment = buildFragment(gatewayPort, enabled);
 		Files.writeString(target, fragment);
-		log.info("[writeFragment] 已寫入 PathGateway 片段 {} ({} 個 Context)", target, enabled.size());
+		log.info("[writeFragment] instance={} 已寫入 PathGateway 片段 {} ({} 個 Context)", instanceId, target,
+				enabled.size());
 	}
 
-	String buildFragment(List<TomcatServiceConfig> enabledServices) {
+	String buildFragment(int gatewayPort, List<TomcatServiceConfig> enabledServices) {
 		StringBuilder xml = new StringBuilder();
 		xml.append("  <Service name=\"").append(escapeXml(serviceName)).append("\">\n");
 		xml.append("    <Connector address=\"").append(escapeXml(upstreamHost))

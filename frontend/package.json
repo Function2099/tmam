@@ -15,6 +15,7 @@
     "sync:static": "node ../scripts/sync-static.cjs",
     "package:backend": "cd ../backend && mvnw.cmd package -DskipTests -q",
     "build:desktop": "node ../scripts/build-desktop.cjs",
+    "build:desktop1": "node ../scripts/build-desktop.cjs build1",
     "electron:build": "electron-builder --win"
   },
   "dependencies": {
@@ -48,6 +49,7 @@
       }
     ],
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         {
           "target": "nsis",

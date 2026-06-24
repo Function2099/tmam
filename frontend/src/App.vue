@@ -8,7 +8,7 @@
         router
         :default-active="activeMenu"
       >
-        <el-menu-item index="/">Service 管理</el-menu-item>
+        <el-menu-item index="/">Tomcat 實例</el-menu-item>
         <el-menu-item v-if="showLegacyProjects" index="/projects">專案管理（舊）</el-menu-item>
       </el-menu>
     </el-header>
@@ -27,7 +27,8 @@ const route = useRoute()
 const showLegacyProjects = ref(false)
 
 const activeMenu = computed(() => {
-  if (route.path.startsWith('/logs')) return '/'
+  if (route.path.startsWith('/tomcats/')) return '/'
+  if (route.path.startsWith('/projects')) return '/projects'
   return route.path
 })
 

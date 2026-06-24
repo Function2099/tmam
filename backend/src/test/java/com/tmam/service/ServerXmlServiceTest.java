@@ -15,36 +15,37 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.core.io.ClassPathResource;
 
+import com.tmam.model.TomcatInstanceConfig;
 import com.tmam.model.TomcatServiceConfig;
 import com.tmam.model.TomcatServiceType;
 
 class ServerXmlServiceTest {
+
+	private static final String INSTANCE_ID = TomcatInstanceConfig.DEFAULT_ID;
 
 	@TempDir
 	Path tempDir;
 
 	private ServerXmlService serverXmlService;
 	private PathGatewayService pathGatewayService;
-	private Path nativeBase;
+	private Path catalinaBase;
 
 	@BeforeEach
 	void setUp() {
-		nativeBase = tempDir.resolve("native-base");
+		Path instancesRoot = tempDir.resolve("instances");
+		catalinaBase = instancesRoot.resolve(INSTANCE_ID).resolve("catalina-base");
 		XmlConfiguratorService xmlConfiguratorService = new XmlConfiguratorService(
 				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
-				nativeBase.toString(), xmlConfiguratorService);
+				instancesRoot.toString(), xmlConfiguratorService);
 		serverXmlService = new ServerXmlService(
 				tempDir.toString(),
-				"conf/server.xml.tmam-original",
-				tempDir.resolve("fragments").toString(),
 				"PathGateway",
 				nativeTomcatEnvironmentService);
 		pathGatewayService = new PathGatewayService(
 				"PathGateway",
 				"127.0.0.1",
-				8080,
-				tempDir.resolve("fragments").toString());
+				nativeTomcatEnvironmentService);
 	}
 
 	@Test
@@ -53,7 +54,8 @@ class ServerXmlServiceTest {
 		Files.createDirectories(catalinaHome.resolve("conf"));
 		Files.copy(Path.of("src/test/resources/sample-server.xml"), catalinaHome.resolve("conf/server.xml"));
 
-		List<TomcatServiceConfig> imported = serverXmlService.importFromServerXml(catalinaHome.toString());
+		List<TomcatServiceConfig> imported = serverXmlService.importFromServerXml(INSTANCE_ID,
+				catalinaHome.toString());
 		assertEquals(9, imported.size());
 		assertEquals("Portal_Area", imported.get(0).getName());
 		assertEquals("192.168.10.10", imported.get(0).getAddress());
@@ -65,12 +67,12 @@ class ServerXmlServiceTest {
 			services.put(service.getName(), service);
 		});
 
-		serverXmlService.writeEffectiveServerXml(catalinaHome.toString(), services);
+		serverXmlService.writeEffectiveServerXml(INSTANCE_ID, catalinaHome.toString(), services);
 
-		String effective = Files.readString(nativeBase.resolve("conf/server.xml"));
+		String effective = Files.readString(catalinaBase.resolve("conf/server.xml"));
 		assertTrue(effective.contains("<Service name=\"Portal_Area\">"));
 		assertFalse(effective.contains("<Service name=\"Portal_Sport\">"));
-		assertTrue(Files.exists(catalinaHome.resolve("conf/server.xml.tmam-original")));
+		assertTrue(Files.exists(serverXmlService.backupPath(INSTANCE_ID, catalinaHome.toString())));
 	}
 
 	@Test
@@ -79,7 +81,8 @@ class ServerXmlServiceTest {
 		Files.createDirectories(catalinaHome.resolve("conf"));
 		Files.copy(Path.of("src/test/resources/sample-server.xml"), catalinaHome.resolve("conf/server.xml"));
 
-		List<TomcatServiceConfig> imported = serverXmlService.importFromServerXml(catalinaHome.toString());
+		List<TomcatServiceConfig> imported = serverXmlService.importFromServerXml(INSTANCE_ID,
+				catalinaHome.toString());
 		Map<String, TomcatServiceConfig> services = new LinkedHashMap<>();
 		imported.forEach(service -> {
 			service.setEnabled("Portal_Area".equals(service.getName()));
@@ -96,10 +99,10 @@ class ServerXmlServiceTest {
 		pathProxy.setEnabled(true);
 		services.put(pathProxy.getName(), pathProxy);
 
-		pathGatewayService.writeFragment(services.values());
-		serverXmlService.writeEffectiveServerXml(catalinaHome.toString(), services);
+		pathGatewayService.writeFragment(INSTANCE_ID, 8080, services.values());
+		serverXmlService.writeEffectiveServerXml(INSTANCE_ID, catalinaHome.toString(), services);
 
-		String effective = Files.readString(nativeBase.resolve("conf/server.xml"));
+		String effective = Files.readString(catalinaBase.resolve("conf/server.xml"));
 		assertTrue(effective.contains("<Service name=\"Portal_Area\">"));
 		assertTrue(effective.contains("<Service name=\"PathGateway\">"));
 		assertTrue(effective.contains("path=\"/new-system\""));
@@ -132,7 +135,7 @@ class ServerXmlServiceTest {
 		Files.createDirectories(catalinaHome.resolve("conf"));
 		Files.copy(Path.of("src/test/resources/sample-server.xml"), catalinaHome.resolve("conf/server.xml"));
 
-		serverXmlService.importFromServerXml(catalinaHome.toString());
+		serverXmlService.importFromServerXml(INSTANCE_ID, catalinaHome.toString());
 		Map<String, TomcatServiceConfig> services = new LinkedHashMap<>();
 		TomcatServiceConfig area = new TomcatServiceConfig();
 		area.setName("Portal_Area");
@@ -140,10 +143,10 @@ class ServerXmlServiceTest {
 		area.setEnabled(true);
 		services.put("Portal_Area", area);
 
-		serverXmlService.writeEffectiveServerXml(catalinaHome.toString(), services);
+		serverXmlService.writeEffectiveServerXml(INSTANCE_ID, catalinaHome.toString(), services);
+		serverXmlService.restoreOriginal(INSTANCE_ID, catalinaHome.toString());
 
-		serverXmlService.restoreOriginal(catalinaHome.toString());
-		String restored = Files.readString(nativeBase.resolve("conf/server.xml"));
+		String restored = Files.readString(catalinaBase.resolve("conf/server.xml"));
 		assertTrue(restored.contains("<Service name=\"Portal_CTSP\">"));
 	}
 

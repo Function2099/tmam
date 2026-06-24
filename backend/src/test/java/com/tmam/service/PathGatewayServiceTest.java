@@ -1,22 +1,24 @@
 package com.tmam.service;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashMap;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import com.tmam.model.TmamConfig;
+import com.tmam.model.TomcatInstanceConfig;
 import com.tmam.model.TomcatServiceConfig;
 import com.tmam.model.TomcatServiceType;
 
 class PathGatewayServiceTest {
+
+	private static final String INSTANCE_ID = TomcatInstanceConfig.DEFAULT_ID;
 
 	@TempDir
 	Path tempDir;
@@ -25,11 +27,15 @@ class PathGatewayServiceTest {
 
 	@BeforeEach
 	void setUp() {
+		Path instancesRoot = tempDir.resolve("instances");
+		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
+				instancesRoot.toString(),
+				new XmlConfiguratorService(
+						new org.springframework.core.io.ClassPathResource("server-template.xml")));
 		pathGatewayService = new PathGatewayService(
 				"PathGateway",
 				"127.0.0.1",
-				8080,
-				tempDir.resolve("fragments").toString());
+				nativeTomcatEnvironmentService);
 	}
 
 	@Test
@@ -44,9 +50,9 @@ class PathGatewayServiceTest {
 		service.setDocBase(docBase.toString());
 		service.setEnabled(true);
 
-		pathGatewayService.writeFragment(List.of(service));
+		pathGatewayService.writeFragment(INSTANCE_ID, 8080, List.of(service));
 
-		String fragment = Files.readString(pathGatewayService.fragmentPath());
+		String fragment = Files.readString(pathGatewayService.fragmentPath(INSTANCE_ID));
 		assertTrue(fragment.contains("<Service name=\"PathGateway\">"));
 		assertTrue(fragment.contains("address=\"127.0.0.1\""));
 		assertTrue(fragment.contains("port=\"8080\""));
@@ -65,12 +71,12 @@ class PathGatewayServiceTest {
 		service.setPathPrefix("/new-system");
 		service.setDocBase(docBase.toString());
 		service.setEnabled(true);
-		pathGatewayService.writeFragment(List.of(service));
-		assertTrue(Files.exists(pathGatewayService.fragmentPath()));
+		pathGatewayService.writeFragment(INSTANCE_ID, 8080, List.of(service));
+		assertTrue(Files.exists(pathGatewayService.fragmentPath(INSTANCE_ID)));
 
 		service.setEnabled(false);
-		pathGatewayService.writeFragment(List.of(service));
-		assertFalse(Files.exists(pathGatewayService.fragmentPath()));
+		pathGatewayService.writeFragment(INSTANCE_ID, 8080, List.of(service));
+		assertFalse(Files.exists(pathGatewayService.fragmentPath(INSTANCE_ID)));
 	}
 
 }

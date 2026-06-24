@@ -4,14 +4,16 @@
 
 ## 適用場景
 
-- **Native 模式（預設）**：管理 `C:\Program Files\apache-tomcat-9.0.115` 內多個 `<Service>`（如 Portal_Area、Loc 等），勾選要啟動的 Service，一鍵啟停整台 Tomcat。
+- **Native 模式（預設）**：管理一台或多台 Tomcat，每台可勾選要啟動的 Service，**多台可同時並行運行**。
 - **Multi-instance 模式（舊）**：每專案獨立 Tomcat 實例 + WAR 部署（保留供開發測試）。
+
+詳見 [docs/MULTI_TOMCAT.md](docs/MULTI_TOMCAT.md)。
 
 ## 技術棧
 
 - **後端：** Java 17 + Spring Boot 3.5 + Maven Wrapper
 - **前端：** Vue 3 + Vite + Element Plus + Electron 31
-- **受管 Tomcat：** `C:\Program Files\apache-tomcat-9.0.115`
+- **受管 Tomcat：** 由使用者於首次啟動時選擇安裝路徑
 
 ## 環境需求
 
@@ -42,10 +44,13 @@ npm run electron:dev:full
 
 ## Native 模式使用方式
 
-1. 首次啟動後端時，會自動從 `conf/server.xml` **匯入** 所有 Service，並備份為 `conf/server.xml.tmam-original`。
-2. 在 **Service 管理** 頁面勾選要啟動的 Service。
-3. 點 **套用勾選並啟動** 或 **全部啟動**。
-4. 單一 Service 的 **啟用/停用** 會整台 Tomcat 重啟（約 50~90 秒）。
+1. **首次啟動**請選擇本機 Tomcat 安裝目錄（掃描或手動輸入），路徑會儲存於 `%USERPROFILE%\.tmam\projects.json`，之後無需重選。
+2. 首頁顯示 **Tomcat 實例列表**；可再新增其他 Tomcat 安裝路徑。
+3. 點 **管理 Service** 進入該實例，勾選要啟動的 Service。
+4. 點 **套用勾選並啟動**；各實例可獨立啟停。
+5. **新增系統** 可選路徑型（Nginx）或 IP 型（需網卡 IP）。
+
+從 v1 升級的使用者會自動遷移既有 `catalinaHome` 設定（見 MULTI_TOMCAT.md）。
 
 ### 重要限制
 
@@ -70,10 +75,10 @@ npm run electron:dev:full
 
 | 檔案 | 用途 |
 |------|------|
-| `%USERPROFILE%\.tmam\projects.json` | Service 啟用狀態、PATH_PROXY 定義、Tomcat 路徑 |
-| `%USERPROFILE%\.tmam\server-fragments\` | 從 server.xml 切出的 Service 片段 + PathGateway |
+| `%USERPROFILE%\.tmam\projects.json` | v2 設定（`tomcatInstances`） |
+| `%USERPROFILE%\.tmam\instances\{id}\` | 每實例 catalina-base、fragments |
 | `%USERPROFILE%\.tmam\nginx\` | Nginx 主設定與 location 分流規則 |
-| `%USERPROFILE%\.tmam\backups\server.xml.tmam-original` | 原始 server.xml 備份 |
+| `%USERPROFILE%\.tmam\instances\{id}\backups\` | 每實例 server.xml 備份 |
 
 ### application.yml 關鍵項
 

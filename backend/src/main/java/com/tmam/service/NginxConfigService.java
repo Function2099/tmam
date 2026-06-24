@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.tmam.model.TmamConfig;
+import com.tmam.model.TomcatInstanceConfig;
 import com.tmam.model.TomcatServiceConfig;
 import com.tmam.model.TomcatServiceType;
 
@@ -28,7 +29,6 @@ public class NginxConfigService {
 	private final Path locationsFragment;
 	private final int listenPort;
 	private final String upstreamHost;
-	private final int gatewayPort;
 
 	public NginxConfigService(
 			@Value("${tmam.nginx.enabled:true}") boolean enabled,
@@ -36,15 +36,13 @@ public class NginxConfigService {
 			@Value("${tmam.nginx.config-path}") String configPath,
 			@Value("${tmam.nginx.locations-fragment}") String locationsFragment,
 			@Value("${tmam.nginx.listen-port:80}") int listenPort,
-			@Value("${tmam.nginx.upstream-host:127.0.0.1}") String upstreamHost,
-			@Value("${tmam.nginx.gateway-port:8080}") int gatewayPort) {
+			@Value("${tmam.nginx.upstream-host:127.0.0.1}") String upstreamHost) {
 		this.enabled = enabled;
 		this.executable = executable;
 		this.configPath = Path.of(configPath);
 		this.locationsFragment = Path.of(locationsFragment);
 		this.listenPort = listenPort;
 		this.upstreamHost = upstreamHost;
-		this.gatewayPort = gatewayPort;
 	}
 
 	static NginxConfigService forTest(Path tempDir) {
@@ -54,8 +52,7 @@ public class NginxConfigService {
 				tempDir.resolve("nginx/nginx.conf").toString(),
 				tempDir.resolve("nginx/tmam-locations.conf").toString(),
 				80,
-				"127.0.0.1",
-				8080);
+				"127.0.0.1");
 	}
 
 	public boolean isEnabled() {
@@ -76,6 +73,10 @@ public class NginxConfigService {
 
 	public Path getLocationsFragment() {
 		return locationsFragment;
+	}
+
+	public String getUpstreamHost() {
+		return upstreamHost;
 	}
 
 	public boolean isAvailable() {
@@ -103,23 +104,28 @@ public class NginxConfigService {
 	}
 
 	String buildLocationsFragment(TmamConfig config) {
-		List<TomcatServiceConfig> pathProxies = config.getServices().values().stream()
-				.filter(service -> service.getType() == TomcatServiceType.PATH_PROXY && service.isEnabled())
-				.collect(Collectors.toList());
+		List<String> blocks = new ArrayList<>();
+		for (TomcatInstanceConfig instance : config.getTomcatInstances().values()) {
+			List<TomcatServiceConfig> pathProxies = instance.getServices().values().stream()
+					.filter(service -> service.getType() == TomcatServiceType.PATH_PROXY && service.isEnabled())
+					.collect(Collectors.toList());
+			for (TomcatServiceConfig service : pathProxies) {
+				blocks.add(buildLocationBlock(service, instance.getGatewayPort()));
+			}
+		}
 
-		if (pathProxies.isEmpty()) {
+		if (blocks.isEmpty()) {
 			return "# TMAM managed locations (no PATH_PROXY services enabled)\n";
 		}
 
 		StringBuilder content = new StringBuilder("# TMAM managed locations\n");
-		for (TomcatServiceConfig service : pathProxies) {
-			content.append(buildLocationBlock(service));
-			content.append('\n');
+		for (String block : blocks) {
+			content.append(block).append('\n');
 		}
 		return content.toString();
 	}
 
-	private String buildLocationBlock(TomcatServiceConfig service) {
+	private String buildLocationBlock(TomcatServiceConfig service, int gatewayPort) {
 		String locationPrefix = PathProxyValidator.nginxLocationPrefix(service.getPathPrefix());
 		String contextPath = PathProxyValidator.contextPathForTomcat(service.getPathPrefix());
 		String upstreamBase = "http://" + upstreamHost + ":" + gatewayPort;
@@ -196,7 +202,8 @@ public class NginxConfigService {
 	public void reloadOrStart() throws IOException, InterruptedException {
 		try {
 			reload();
-		} catch (IOException ex) {
+		}
+		catch (IOException ex) {
 			log.info("[reloadOrStart] reload 失敗，改為啟動 Nginx: {}", ex.getMessage());
 			start();
 		}

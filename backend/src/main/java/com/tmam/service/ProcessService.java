@@ -32,6 +32,7 @@ import com.tmam.util.LogFileReader;
 import com.tmam.model.ProjectConfig;
 import com.tmam.model.StartResult;
 import com.tmam.model.TmamConfig;
+import com.tmam.model.TomcatInstanceConfig;
 import com.tmam.model.TomcatServiceConfig;
 
 @Service
@@ -40,7 +41,6 @@ public class ProcessService {
 	private static final Logger log = LoggerFactory.getLogger(ProcessService.class);
 
 	private static final String SUCCESS_MARKER = "Server startup in";
-	private static final String NATIVE_TOMCAT_KEY = "tomcat";
 
 	private final String instancesRoot;
 	private final String pidsRoot;
@@ -177,105 +177,90 @@ public class ProcessService {
 		return getLastLines(logFile, lines);
 	}
 
-	public StartResult startNativeTomcat(TmamConfig config) throws IOException, InterruptedException {
-		log.info("[startNativeTomcat] 開始啟動 native Tomcat");
-		if (nativeTomcatStatus(config) == InstanceStatus.RUNNING) {
-			log.warn("[startNativeTomcat] 失敗：Tomcat 已在運行中");
-			return StartResult.failure(NATIVE_TOMCAT_KEY, "Tomcat 已在運行中");
+	public StartResult startTomcatInstance(TmamConfig config, String instanceId) throws IOException, InterruptedException {
+		TomcatInstanceConfig instance = config.requireInstance(instanceId);
+		log.info("[startTomcatInstance] instance={}", instanceId);
+		if (tomcatInstanceStatus(config, instanceId) == InstanceStatus.RUNNING) {
+			return StartResult.failure(instanceId, "Tomcat 實例已在運行中");
 		}
 
-		Path catalinaHome = Path.of(resolveNativeCatalinaHome(config));
-		nativeTomcatEnvironmentService.ensureInitialized(catalinaHome.toString());
-		Path catalinaBase = nativeTomcatEnvironmentService.getNativeCatalinaBase();
+		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
+		nativeTomcatEnvironmentService.ensureInitialized(instanceId, catalinaHome.toString());
+		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
 		boolean windows = isWindows();
-		log.info("[startNativeTomcat] catalinaHome={}, catalinaBase={}, windows={}", catalinaHome, catalinaBase,
-				windows);
+		log.info("[startTomcatInstance] catalinaHome={}, catalinaBase={}", catalinaHome, catalinaBase);
 
 		Path script = windows
 				? catalinaHome.resolve("bin/catalina.bat")
 				: catalinaHome.resolve("bin/catalina.sh");
-		log.info("[startNativeTomcat] 執行腳本: {} run", script);
 
 		ProcessBuilder processBuilder = new ProcessBuilder(script.toString(), "run");
 		processBuilder.environment().put("CATALINA_HOME", catalinaHome.toString());
 		processBuilder.environment().put("CATALINA_BASE", catalinaBase.toString());
-		applyNativeJvmOpts(processBuilder, config);
+		applyInstanceJvmOpts(processBuilder, config, instance);
 		processBuilder.redirectErrorStream(true);
 
 		Process process = processBuilder.start();
 		long pid = process.pid();
-		log.info("[startNativeTomcat] 進程已啟動, PID={}", pid);
-		activeProcesses.put(NATIVE_TOMCAT_KEY, process);
-		writePid(NATIVE_TOMCAT_KEY, pid);
+		activeProcesses.put(instanceId, process);
+		writePid(instanceId, pid);
 
 		AtomicBoolean started = new AtomicBoolean(false);
 		Thread outputWatcher = new Thread(() -> watchProcessOutput(process, started));
 		outputWatcher.setDaemon(true);
 		outputWatcher.start();
 
-		log.info("[startNativeTomcat] 等待啟動完成（逾時 {} 秒）...", startupTimeoutSec);
-		StartResult result = monitorStartup(NATIVE_TOMCAT_KEY, catalinaBase, started);
+		StartResult result = monitorStartup(instanceId, catalinaBase, started);
 		if (!result.success()) {
-			log.error("[startNativeTomcat] 啟動失敗: {}", result.message());
-			stopProcess(NATIVE_TOMCAT_KEY, process);
+			stopProcess(instanceId, process);
 		}
-		else {
-			log.info("[startNativeTomcat] 啟動成功");
-		}
-		return new StartResult(result.success(), NATIVE_TOMCAT_KEY, result.message());
+		return new StartResult(result.success(), instanceId, result.message());
 	}
 
-	public void stopNativeTomcat(TmamConfig config) throws IOException, InterruptedException {
-		InstanceStatus status = nativeTomcatStatus(config);
-		log.info("[stopNativeTomcat] 開始停止, 目前狀態={}", status);
+	public void stopTomcatInstance(TmamConfig config, String instanceId) throws IOException, InterruptedException {
+		InstanceStatus status = tomcatInstanceStatus(config, instanceId);
+		log.info("[stopTomcatInstance] instance={}, status={}", instanceId, status);
 		if (status == InstanceStatus.STOPPED) {
-			log.info("[stopNativeTomcat] 已停止，清理 PID 檔");
-			cleanup(NATIVE_TOMCAT_KEY);
+			cleanup(instanceId);
 			return;
 		}
 
-		Process tracked = activeProcesses.get(NATIVE_TOMCAT_KEY);
+		Process tracked = activeProcesses.get(instanceId);
 		if (tracked != null && tracked.isAlive()) {
-			log.info("[stopNativeTomcat] 停止 TMAM 追蹤的進程 PID={}", tracked.pid());
-			stopProcess(NATIVE_TOMCAT_KEY, tracked);
+			stopProcess(instanceId, tracked);
 		}
 
 		try {
-			long pid = readPid(NATIVE_TOMCAT_KEY);
+			long pid = readPid(instanceId);
 			Optional<ProcessHandle> handle = ProcessHandle.of(pid);
 			if (handle.isPresent() && handle.get().isAlive()) {
-				log.info("[stopNativeTomcat] 透過 PID 檔停止進程 PID={}", pid);
 				handle.get().destroy();
 				if (!waitForExit(handle.get(), 10)) {
-					log.warn("[stopNativeTomcat] PID {} 未在 10 秒內結束，強制終止", pid);
 					handle.get().destroyForcibly();
 				}
 			}
 		}
 		catch (IOException ignored) {
-			log.debug("[stopNativeTomcat] 無 PID 檔");
+			// no pid file
 		}
 
-		if (isAnyEnabledServiceListening(config)) {
-			log.info("[stopNativeTomcat] 仍有 Service 埠在監聽，執行 catalina stop");
-			stopNativeViaCatalina(config);
-			waitForNativeServicesClosed(config, 30);
-			log.info("[stopNativeTomcat] catalina stop 完成");
+		if (isAnyEnabledServiceListening(config.requireInstance(instanceId))) {
+			stopInstanceViaCatalina(config, instanceId);
+			waitForInstanceServicesClosed(config, instanceId, 30);
 		}
 
-		cleanup(NATIVE_TOMCAT_KEY);
-		log.info("[stopNativeTomcat] 停止完成");
+		cleanup(instanceId);
 	}
 
-	public InstanceStatus nativeTomcatStatus(TmamConfig config) {
+	public InstanceStatus tomcatInstanceStatus(TmamConfig config, String instanceId) {
 		try {
-			Process tracked = activeProcesses.get(NATIVE_TOMCAT_KEY);
+			Process tracked = activeProcesses.get(instanceId);
 			if (tracked != null && tracked.isAlive()) {
 				return InstanceStatus.RUNNING;
 			}
 
 			try {
-				long pid = readPid(NATIVE_TOMCAT_KEY);
+				long pid = readPid(instanceId);
 				if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
 					return InstanceStatus.RUNNING;
 				}
@@ -284,7 +269,8 @@ public class ProcessService {
 				// no pid file
 			}
 
-			if (isAnyEnabledServiceListening(config)) {
+			TomcatInstanceConfig instance = config.getTomcatInstances().get(instanceId);
+			if (instance != null && isAnyEnabledServiceListening(instance)) {
 				return InstanceStatus.RUNNING;
 			}
 			return InstanceStatus.STOPPED;
@@ -294,16 +280,16 @@ public class ProcessService {
 		}
 	}
 
-	public boolean isExternallyManaged(TmamConfig config, InstanceStatus tomcatStatus) {
+	public boolean isExternallyManaged(TmamConfig config, String instanceId, InstanceStatus tomcatStatus) {
 		if (tomcatStatus != InstanceStatus.RUNNING) {
 			return false;
 		}
-		Process tracked = activeProcesses.get(NATIVE_TOMCAT_KEY);
+		Process tracked = activeProcesses.get(instanceId);
 		if (tracked != null && tracked.isAlive()) {
 			return false;
 		}
 		try {
-			long pid = readPid(NATIVE_TOMCAT_KEY);
+			long pid = readPid(instanceId);
 			if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
 				return false;
 			}
@@ -311,7 +297,99 @@ public class ProcessService {
 		catch (IOException ignored) {
 			// no pid file
 		}
-		return isAnyEnabledServiceListening(config);
+		TomcatInstanceConfig instance = config.getTomcatInstances().get(instanceId);
+		return instance != null && isAnyEnabledServiceListening(instance);
+	}
+
+	public List<String> getTomcatInstanceLogs(String instanceId, int lines) throws IOException {
+		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
+		return getLastLines(resolveLogFile(catalinaBase), lines);
+	}
+
+	/** @deprecated 使用 {@link #startTomcatInstance} */
+	public StartResult startNativeTomcat(TmamConfig config) throws IOException, InterruptedException {
+		return startTomcatInstance(config, TomcatInstanceConfig.DEFAULT_ID);
+	}
+
+	/** @deprecated 使用 {@link #stopTomcatInstance} */
+	public void stopNativeTomcat(TmamConfig config) throws IOException, InterruptedException {
+		stopTomcatInstance(config, TomcatInstanceConfig.DEFAULT_ID);
+	}
+
+	/** @deprecated 使用 {@link #tomcatInstanceStatus} */
+	public InstanceStatus nativeTomcatStatus(TmamConfig config) {
+		return tomcatInstanceStatus(config, TomcatInstanceConfig.DEFAULT_ID);
+	}
+
+	/** @deprecated */
+	public boolean isExternallyManaged(TmamConfig config, InstanceStatus tomcatStatus) {
+		return isExternallyManaged(config, TomcatInstanceConfig.DEFAULT_ID, tomcatStatus);
+	}
+
+	/** @deprecated */
+	public List<String> getNativeTomcatLogs(int lines) throws IOException {
+		return getTomcatInstanceLogs(TomcatInstanceConfig.DEFAULT_ID, lines);
+	}
+
+	private boolean isAnyEnabledServiceListening(TomcatInstanceConfig instance) {
+		if (instance.getServices() == null || instance.getServices().isEmpty()) {
+			return false;
+		}
+		return instance.getServices().values().stream()
+				.filter(TomcatServiceConfig::isEnabled)
+				.anyMatch(service -> {
+					if (service.isPathProxy()) {
+						return isServicePortListening("127.0.0.1", instance.getGatewayPort());
+					}
+					return isServicePortListening(service.getAddress(), service.getPort());
+				});
+	}
+
+	private void stopInstanceViaCatalina(TmamConfig config, String instanceId) throws IOException, InterruptedException {
+		TomcatInstanceConfig instance = config.requireInstance(instanceId);
+		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
+		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
+		Path script = isWindows()
+				? catalinaHome.resolve("bin/catalina.bat")
+				: catalinaHome.resolve("bin/catalina.sh");
+
+		ProcessBuilder processBuilder = new ProcessBuilder(script.toString(), "stop");
+		processBuilder.environment().put("CATALINA_HOME", catalinaHome.toString());
+		processBuilder.environment().put("CATALINA_BASE", catalinaBase.toString());
+		applyInstanceJvmOpts(processBuilder, config, instance);
+		Process stopProcess = processBuilder.start();
+		stopProcess.waitFor(30, TimeUnit.SECONDS);
+	}
+
+	private void waitForInstanceServicesClosed(TmamConfig config, String instanceId, int timeoutSec)
+			throws InterruptedException {
+		TomcatInstanceConfig instance = config.requireInstance(instanceId);
+		long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
+		while (System.currentTimeMillis() < deadline) {
+			if (!isAnyEnabledServiceListening(instance)) {
+				return;
+			}
+			Thread.sleep(500);
+		}
+	}
+
+	private void applyInstanceJvmOpts(ProcessBuilder processBuilder, TmamConfig config,
+			TomcatInstanceConfig instance) {
+		String jvmOpts = instance.getJvmOpts();
+		if (jvmOpts == null || jvmOpts.isBlank()) {
+			jvmOpts = config.getDefaults() != null ? config.getDefaults().getJvmOpts() : null;
+		}
+		if (jvmOpts != null && !jvmOpts.isBlank()) {
+			processBuilder.environment().put("JAVA_OPTS", jvmOpts);
+			processBuilder.environment().put("CATALINA_OPTS", jvmOpts);
+		}
+	}
+
+	private String resolveInstanceCatalinaHome(TomcatInstanceConfig instance) {
+		if (instance.getCatalinaHome() != null && !instance.getCatalinaHome().isBlank()) {
+			return instance.getCatalinaHome();
+		}
+		return defaultCatalinaHome;
 	}
 
 	public boolean isServicePortListening(String address, int port) {
@@ -339,60 +417,6 @@ public class ProcessService {
 		catch (IOException e) {
 			return false;
 		}
-	}
-
-	public List<String> getNativeTomcatLogs(int lines) throws IOException {
-		Path catalinaBase = nativeTomcatEnvironmentService.getNativeCatalinaBase();
-		return getLastLines(resolveLogFile(catalinaBase), lines);
-	}
-
-	private boolean isAnyEnabledServiceListening(TmamConfig config) {
-		if (config.getServices() == null || config.getServices().isEmpty()) {
-			return false;
-		}
-		return config.getServices().values().stream()
-				.filter(TomcatServiceConfig::isEnabled)
-				.anyMatch(service -> isServicePortListening(service.getAddress(), service.getPort()));
-	}
-
-	private void stopNativeViaCatalina(TmamConfig config) throws IOException, InterruptedException {
-		Path catalinaHome = Path.of(resolveNativeCatalinaHome(config));
-		Path catalinaBase = nativeTomcatEnvironmentService.getNativeCatalinaBase();
-		Path script = isWindows()
-				? catalinaHome.resolve("bin/catalina.bat")
-				: catalinaHome.resolve("bin/catalina.sh");
-
-		ProcessBuilder processBuilder = new ProcessBuilder(script.toString(), "stop");
-		processBuilder.environment().put("CATALINA_HOME", catalinaHome.toString());
-		processBuilder.environment().put("CATALINA_BASE", catalinaBase.toString());
-		applyNativeJvmOpts(processBuilder, config);
-		Process stopProcess = processBuilder.start();
-		stopProcess.waitFor(30, TimeUnit.SECONDS);
-	}
-
-	private void waitForNativeServicesClosed(TmamConfig config, int timeoutSec) throws InterruptedException {
-		long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
-		while (System.currentTimeMillis() < deadline) {
-			if (!isAnyEnabledServiceListening(config)) {
-				return;
-			}
-			Thread.sleep(500);
-		}
-	}
-
-	private void applyNativeJvmOpts(ProcessBuilder processBuilder, TmamConfig config) {
-		String jvmOpts = config.getDefaults() != null ? config.getDefaults().getJvmOpts() : null;
-		if (jvmOpts != null && !jvmOpts.isBlank()) {
-			processBuilder.environment().put("JAVA_OPTS", jvmOpts);
-			processBuilder.environment().put("CATALINA_OPTS", jvmOpts);
-		}
-	}
-
-	private String resolveNativeCatalinaHome(TmamConfig config) {
-		if (config.getCatalinaHome() != null && !config.getCatalinaHome().isBlank()) {
-			return config.getCatalinaHome();
-		}
-		return defaultCatalinaHome;
 	}
 
 	private boolean isHttpPortListening(String projectName) throws IOException {

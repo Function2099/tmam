@@ -14,5 +14,23 @@ public record TomcatServiceView(
 		String pathPrefix,
 		String docBase,
 		String publicUrl,
-		boolean proxyStripPrefix) {
+		boolean proxyStripPrefix,
+		boolean userCreated) {
+
+	public TomcatServiceView(
+			String name,
+			String displayName,
+			TomcatServiceType type,
+			String address,
+			int port,
+			boolean enabled,
+			InstanceStatus status,
+			String pathPrefix,
+			String docBase,
+			String publicUrl,
+			boolean proxyStripPrefix) {
+		this(name, displayName, type, address, port, enabled, status, pathPrefix, docBase, publicUrl,
+				proxyStripPrefix, false);
+	}
+
 }

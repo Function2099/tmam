@@ -102,4 +102,27 @@ class TomcatControllerTest {
 		verify(tomcatManagementService).deletePathProxyService("New_System");
 	}
 
+	@Test
+	void applyAndStart_success() throws Exception {
+		when(tomcatManagementService.applyAndStart())
+				.thenReturn(StartResult.success("tomcat"));
+
+		mockMvc.perform(post("/api/tomcat/apply"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true));
+
+		verify(tomcatManagementService).applyAndStart();
+	}
+
+	@Test
+	void applyAndStart_failure() throws Exception {
+		when(tomcatManagementService.applyAndStart())
+				.thenReturn(StartResult.failure("tomcat", "至少需要啟用一個 Service"));
+
+		mockMvc.perform(post("/api/tomcat/apply"))
+				.andExpect(status().is5xxServerError())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.message").value("至少需要啟用一個 Service"));
+	}
+
 }

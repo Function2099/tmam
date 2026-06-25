@@ -41,11 +41,12 @@ public class TomcatInstanceManagementService {
 	private final PathGatewayService pathGatewayService;
 	private final NginxConfigService nginxConfigService;
 	private final TomcatDiscoveryService tomcatDiscoveryService;
+	private final InstanceOperationLock instanceOperationLock;
 
 	public TomcatInstanceManagementService(ConfigService configService, ServerXmlService serverXmlService,
 			ProcessService processService, NativeTomcatEnvironmentService nativeTomcatEnvironmentService,
 			PathGatewayService pathGatewayService, NginxConfigService nginxConfigService,
-			TomcatDiscoveryService tomcatDiscoveryService) {
+			TomcatDiscoveryService tomcatDiscoveryService, InstanceOperationLock instanceOperationLock) {
 		this.configService = configService;
 		this.serverXmlService = serverXmlService;
 		this.processService = processService;
@@ -53,6 +54,7 @@ public class TomcatInstanceManagementService {
 		this.pathGatewayService = pathGatewayService;
 		this.nginxConfigService = nginxConfigService;
 		this.tomcatDiscoveryService = tomcatDiscoveryService;
+		this.instanceOperationLock = instanceOperationLock;
 	}
 
 	public TmamConfig ensureReady() throws Exception {
@@ -313,6 +315,54 @@ public class TomcatInstanceManagementService {
 	}
 
 	public StartResult start(String instanceId) throws Exception {
+		try {
+			return instanceOperationLock.withLock(instanceId, () -> doStart(instanceId));
+		}
+		catch (InstanceOperationLock.InstanceOperationBusyException e) {
+			return instanceOperationLock.busyResult(instanceId);
+		}
+	}
+
+	public void stop(String instanceId) throws Exception {
+		try {
+			instanceOperationLock.withLock(instanceId, () -> {
+				doStop(instanceId);
+				return null;
+			});
+		}
+		catch (InstanceOperationLock.InstanceOperationBusyException e) {
+			throw new IllegalStateException("操作進行中，請稍後再試");
+		}
+	}
+
+	public StartResult restart(String instanceId) throws Exception {
+		try {
+			return instanceOperationLock.withLock(instanceId, () -> doRestart(instanceId));
+		}
+		catch (InstanceOperationLock.InstanceOperationBusyException e) {
+			return instanceOperationLock.busyResult(instanceId);
+		}
+	}
+
+	public StartResult applyAndStart(String instanceId) throws Exception {
+		try {
+			return instanceOperationLock.withLock(instanceId, () -> doApplyAndStart(instanceId));
+		}
+		catch (InstanceOperationLock.InstanceOperationBusyException e) {
+			return instanceOperationLock.busyResult(instanceId);
+		}
+	}
+
+	public StartResult toggleService(String instanceId, String name) throws Exception {
+		try {
+			return instanceOperationLock.withLock(instanceId, () -> doToggleService(instanceId, name));
+		}
+		catch (InstanceOperationLock.InstanceOperationBusyException e) {
+			return instanceOperationLock.busyResult(instanceId);
+		}
+	}
+
+	private StartResult doStart(String instanceId) throws Exception {
 		TmamConfig config = ensureInstanceReady(instanceId);
 		if (processService.tomcatInstanceStatus(config, instanceId) == InstanceStatus.RUNNING) {
 			return StartResult.failure(instanceId, "Tomcat 已在運行中");
@@ -321,12 +371,12 @@ public class TomcatInstanceManagementService {
 		return processService.startTomcatInstance(config, instanceId);
 	}
 
-	public void stop(String instanceId) throws Exception {
+	private void doStop(String instanceId) throws Exception {
 		TmamConfig config = ensureInstanceReady(instanceId);
 		processService.stopTomcatInstance(config, instanceId);
 	}
 
-	public StartResult restart(String instanceId) throws Exception {
+	private StartResult doRestart(String instanceId) throws Exception {
 		TmamConfig config = ensureInstanceReady(instanceId);
 		processService.stopTomcatInstance(config, instanceId);
 		Thread.sleep(1000);
@@ -334,7 +384,7 @@ public class TomcatInstanceManagementService {
 		return processService.startTomcatInstance(config, instanceId);
 	}
 
-	public StartResult applyAndStart(String instanceId) throws Exception {
+	private StartResult doApplyAndStart(String instanceId) throws Exception {
 		TmamConfig config = ensureInstanceReady(instanceId);
 		TomcatInstanceConfig instance = config.requireInstance(instanceId);
 		List<String> enabledServices = instance.getServices().values().stream()
@@ -345,6 +395,11 @@ public class TomcatInstanceManagementService {
 				instanceId, enabledServices.size(), instance.getServices().size(), enabledServices);
 
 		boolean wasRunning = processService.tomcatInstanceStatus(config, instanceId) == InstanceStatus.RUNNING;
+		if (!wasRunning && instance.getServices().values().stream().noneMatch(TomcatServiceConfig::isEnabled)) {
+			log.warn("[applyAndStart] instance={} 套用失敗：未勾選任何 Service", instanceId);
+			return StartResult.failure(instanceId, "至少需要啟用一個 Service");
+		}
+
 		if (wasRunning) {
 			log.info("[applyAndStart] instance={} 停止運行中的 Tomcat 以套用新設定", instanceId);
 			processService.stopTomcatInstance(config, instanceId);
@@ -353,11 +408,6 @@ public class TomcatInstanceManagementService {
 
 		log.info("[applyAndStart] instance={} 寫入 server.xml、PathGateway 片段與 Nginx 設定", instanceId);
 		applyArtifacts(config, instanceId);
-
-		if (!wasRunning && instance.getServices().values().stream().noneMatch(TomcatServiceConfig::isEnabled)) {
-			log.warn("[applyAndStart] instance={} 套用失敗：未勾選任何 Service", instanceId);
-			return StartResult.failure(instanceId, "至少需要啟用一個 Service");
-		}
 
 		log.info("[applyAndStart] instance={} 啟動 Tomcat", instanceId);
 		StartResult result = processService.startTomcatInstance(config, instanceId);
@@ -370,7 +420,7 @@ public class TomcatInstanceManagementService {
 		return result;
 	}
 
-	public StartResult toggleService(String instanceId, String name) throws Exception {
+	private StartResult doToggleService(String instanceId, String name) throws Exception {
 		TmamConfig config = ensureInstanceReady(instanceId);
 		TomcatInstanceConfig instance = config.requireInstance(instanceId);
 		TomcatServiceConfig service = instance.getServices().get(name);

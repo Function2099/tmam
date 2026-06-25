@@ -122,6 +122,36 @@ tmam/
 └── build/       # Electron 打包輸出
 ```
 
+## 開發與測試
+
+### 後端單元測試
+
+```powershell
+cd backend
+.\mvnw.cmd test
+```
+
+預設會排除標記為 `integration` 的測試（需本機安裝 Tomcat）。若要執行整合測試：
+
+```powershell
+.\mvnw.cmd test -Dgroups=integration
+```
+
+### CI
+
+Push 或 Pull Request 至 `main`/`master` 時，GitHub Actions 會在 `windows-latest` 上執行後端單元測試與前端 build（見 [.github/workflows/ci.yml](.github/workflows/ci.yml)）。
+
+### Release
+
+推送版本 tag 會自動建置 Windows 桌面安裝包並發佈至 GitHub Releases：
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Release workflow 會將 `frontend/package.json` 的 version 同步為 tag 版本（去掉 `v` 前綴），產出 `build/TMAM Setup x.x.x.exe`（見 [.github/workflows/release.yml](.github/workflows/release.yml)）。
+
 ## 桌面應用打包
 
 ```powershell

@@ -1,16 +1,12 @@
 package com.tmam.service;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -41,6 +37,7 @@ public class ProcessService {
 	private static final Logger log = LoggerFactory.getLogger(ProcessService.class);
 
 	private static final String SUCCESS_MARKER = "Server startup in";
+	private static final String MANAGED_SUFFIX = ".managed";
 
 	private final String instancesRoot;
 	private final String pidsRoot;
@@ -73,33 +70,9 @@ public class ProcessService {
 
 		Path catalinaBase = Path.of(instancesRoot, name);
 		Path catalinaHome = Path.of(resolveCatalinaHome(project));
-		boolean windows = isWindows();
-
-		// catalina run 可取得正確 JVM PID（Windows 上 start 會 fork 子進程）
-		Path script = windows
-				? catalinaHome.resolve("bin/catalina.bat")
-				: catalinaHome.resolve("bin/catalina.sh");
-
-		ProcessBuilder processBuilder = new ProcessBuilder(script.toString(), "run");
-		processBuilder.environment().put("CATALINA_HOME", catalinaHome.toString());
-		processBuilder.environment().put("CATALINA_BASE", catalinaBase.toString());
-		applyJvmOpts(processBuilder, project);
-		processBuilder.redirectErrorStream(true);
-
-		Process process = processBuilder.start();
-		activeProcesses.put(name, process);
-		writePid(name, process.pid());
-
-		AtomicBoolean started = new AtomicBoolean(false);
-		Thread outputWatcher = new Thread(() -> watchProcessOutput(process, started));
-		outputWatcher.setDaemon(true);
-		outputWatcher.start();
-
-		StartResult result = monitorStartup(name, catalinaBase, started);
-		if (!result.success()) {
-			stopProcess(name, process);
-		}
-		return result;
+		return startDetached(name, catalinaHome, catalinaBase,
+				processBuilder -> applyJvmOpts(processBuilder, project),
+				() -> stopViaCatalina(name));
 	}
 
 	public void stop(String projectName) throws IOException, InterruptedException {
@@ -108,30 +81,14 @@ public class ProcessService {
 			return;
 		}
 
-		Process tracked = activeProcesses.get(projectName);
-		if (tracked != null && tracked.isAlive()) {
-			stopProcess(projectName, tracked);
-		}
+		activeProcesses.remove(projectName);
 
-		try {
-			long pid = readPid(projectName);
-			Optional<ProcessHandle> handle = ProcessHandle.of(pid);
-			if (handle.isPresent() && handle.get().isAlive()) {
-				handle.get().destroy();
-				if (!waitForExit(handle.get(), 10)) {
-					handle.get().destroyForcibly();
-				}
-			}
-		}
-		catch (IOException ignored) {
-			// no pid file
-		}
-
-		if (isHttpPortListening(projectName)) {
+		if (isHttpPortListening(projectName) || isPidAlive(projectName)) {
 			stopViaCatalina(projectName);
 			waitForPortClosed(projectName, 15);
 		}
 
+		forceKillIfAlive(projectName);
 		cleanup(projectName);
 	}
 
@@ -187,33 +144,11 @@ public class ProcessService {
 		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
 		nativeTomcatEnvironmentService.ensureInitialized(instanceId, catalinaHome.toString());
 		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
-		boolean windows = isWindows();
 		log.info("[startTomcatInstance] catalinaHome={}, catalinaBase={}", catalinaHome, catalinaBase);
 
-		Path script = windows
-				? catalinaHome.resolve("bin/catalina.bat")
-				: catalinaHome.resolve("bin/catalina.sh");
-
-		ProcessBuilder processBuilder = new ProcessBuilder(script.toString(), "run");
-		processBuilder.environment().put("CATALINA_HOME", catalinaHome.toString());
-		processBuilder.environment().put("CATALINA_BASE", catalinaBase.toString());
-		applyInstanceJvmOpts(processBuilder, config, instance);
-		processBuilder.redirectErrorStream(true);
-
-		Process process = processBuilder.start();
-		long pid = process.pid();
-		activeProcesses.put(instanceId, process);
-		writePid(instanceId, pid);
-
-		AtomicBoolean started = new AtomicBoolean(false);
-		Thread outputWatcher = new Thread(() -> watchProcessOutput(process, started));
-		outputWatcher.setDaemon(true);
-		outputWatcher.start();
-
-		StartResult result = monitorStartup(instanceId, catalinaBase, started);
-		if (!result.success()) {
-			stopProcess(instanceId, process);
-		}
+		StartResult result = startDetached(instanceId, catalinaHome, catalinaBase,
+				processBuilder -> applyInstanceJvmOpts(processBuilder, config, instance),
+				() -> stopInstanceViaCatalina(config, instanceId));
 		return new StartResult(result.success(), instanceId, result.message());
 	}
 
@@ -225,30 +160,15 @@ public class ProcessService {
 			return;
 		}
 
-		Process tracked = activeProcesses.get(instanceId);
-		if (tracked != null && tracked.isAlive()) {
-			stopProcess(instanceId, tracked);
-		}
+		activeProcesses.remove(instanceId);
+		TomcatInstanceConfig instance = config.requireInstance(instanceId);
 
-		try {
-			long pid = readPid(instanceId);
-			Optional<ProcessHandle> handle = ProcessHandle.of(pid);
-			if (handle.isPresent() && handle.get().isAlive()) {
-				handle.get().destroy();
-				if (!waitForExit(handle.get(), 10)) {
-					handle.get().destroyForcibly();
-				}
-			}
-		}
-		catch (IOException ignored) {
-			// no pid file
-		}
-
-		if (isAnyEnabledServiceListening(config.requireInstance(instanceId))) {
+		if (isAnyEnabledServiceListening(instance) || isPidAlive(instanceId)) {
 			stopInstanceViaCatalina(config, instanceId);
 			waitForInstanceServicesClosed(config, instanceId, 30);
 		}
 
+		forceKillIfAlive(instanceId);
 		cleanup(instanceId);
 	}
 
@@ -284,18 +204,8 @@ public class ProcessService {
 		if (tomcatStatus != InstanceStatus.RUNNING) {
 			return false;
 		}
-		Process tracked = activeProcesses.get(instanceId);
-		if (tracked != null && tracked.isAlive()) {
+		if (isManagedByTmam(instanceId)) {
 			return false;
-		}
-		try {
-			long pid = readPid(instanceId);
-			if (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
-				return false;
-			}
-		}
-		catch (IOException ignored) {
-			// no pid file
 		}
 		TomcatInstanceConfig instance = config.getTomcatInstances().get(instanceId);
 		return instance != null && isAnyEnabledServiceListening(instance);
@@ -434,18 +344,100 @@ public class ProcessService {
 		}
 	}
 
-	private StartResult monitorStartup(String name, Path catalinaBase, AtomicBoolean startedFromOutput)
+	private StartResult startDetached(String name, Path catalinaHome, Path catalinaBase,
+			Consumer<ProcessBuilder> configure, StopAction onFailureStop)
+			throws IOException, InterruptedException {
+		Path script = isWindows()
+				? catalinaHome.resolve("bin/catalina.bat")
+				: catalinaHome.resolve("bin/catalina.sh");
+		Path pidFile = Path.of(pidsRoot, name + ".pid");
+
+		ProcessBuilder processBuilder;
+		if (isWindows()) {
+			// 獨立行程啟動，關閉 TMAM 後 Tomcat 仍可繼續運行
+			processBuilder = new ProcessBuilder(
+					"cmd.exe", "/c", "start", "\"Tomcat\"", "/MIN", script.toString(), "run");
+		}
+		else {
+			processBuilder = new ProcessBuilder(script.toString(), "start");
+			processBuilder.environment().put("CATALINA_PID", pidFile.toAbsolutePath().toString());
+		}
+		processBuilder.environment().put("CATALINA_HOME", catalinaHome.toString());
+		processBuilder.environment().put("CATALINA_BASE", catalinaBase.toString());
+		configure.accept(processBuilder);
+		processBuilder.redirectErrorStream(true);
+		processBuilder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+
+		Process launcher = processBuilder.start();
+		launcher.waitFor(10, TimeUnit.SECONDS);
+
+		StartResult result = monitorStartup(name, catalinaBase);
+		if (result.success()) {
+			writeManagedMarker(name);
+			if (!isWindows() && Files.exists(pidFile)) {
+				log.info("[startDetached] {} JVM pid={}", name, Files.readString(pidFile).trim());
+			}
+		}
+		else {
+			onFailureStop.run();
+		}
+		return result;
+	}
+
+	private boolean isManagedByTmam(String name) {
+		Process tracked = activeProcesses.get(name);
+		if (tracked != null && tracked.isAlive()) {
+			return true;
+		}
+		if (Files.exists(managedMarkerPath(name))) {
+			return true;
+		}
+		return isPidAlive(name);
+	}
+
+	private boolean isPidAlive(String name) {
+		try {
+			long pid = readPid(name);
+			return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
+		}
+		catch (IOException ignored) {
+			return false;
+		}
+	}
+
+	private void forceKillIfAlive(String name) throws InterruptedException {
+		try {
+			long pid = readPid(name);
+			Optional<ProcessHandle> handle = ProcessHandle.of(pid);
+			if (handle.isPresent() && handle.get().isAlive()) {
+				handle.get().destroy();
+				if (!waitForExit(handle.get(), 10)) {
+					handle.get().destroyForcibly();
+				}
+			}
+		}
+		catch (IOException ignored) {
+			// no pid file
+		}
+	}
+
+	private Path managedMarkerPath(String name) {
+		return Path.of(pidsRoot, name + MANAGED_SUFFIX);
+	}
+
+	private void writeManagedMarker(String name) throws IOException {
+		Path pidsPath = Path.of(pidsRoot);
+		Files.createDirectories(pidsPath);
+		Files.writeString(managedMarkerPath(name), String.valueOf(System.currentTimeMillis()));
+	}
+
+	private StartResult monitorStartup(String name, Path catalinaBase)
 			throws InterruptedException, IOException {
 		long deadline = System.currentTimeMillis() + startupTimeoutSec * 1000L;
 		Path logFile = resolveLogFile(catalinaBase);
 		log.debug("[monitorStartup] 監控 {} 啟動, logFile={}", name, logFile);
 
 		while (System.currentTimeMillis() < deadline) {
-			if (startedFromOutput.get()) {
-				log.info("[monitorStartup] {} 從進程輸出偵測到啟動成功", name);
-				return StartResult.success(name);
-			}
-
 			if (Files.exists(logFile)) {
 				for (String line : LogFileReader.readLastLines(logFile, 200)) {
 					if (line.contains(SUCCESS_MARKER)) {
@@ -461,23 +453,6 @@ public class ProcessService {
 		log.error("[monitorStartup] {} 啟動逾時（{}秒）, logFile={}, 最後 {} 行日誌",
 				name, startupTimeoutSec, logFile, lastLogs.size());
 		return StartResult.timeout(name, lastLogs);
-	}
-
-	private void watchProcessOutput(Process process, AtomicBoolean started) {
-		try (BufferedReader reader = new BufferedReader(
-				new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
-				log.debug("[catalina] {}", line);
-				if (line.contains(SUCCESS_MARKER)) {
-					started.set(true);
-					break;
-				}
-			}
-		}
-		catch (IOException e) {
-			log.debug("[catalina] 進程輸出已關閉");
-		}
 	}
 
 	private void stopViaCatalina(String projectName) throws IOException, InterruptedException {
@@ -500,16 +475,6 @@ public class ProcessService {
 		stopProcess.waitFor(30, TimeUnit.SECONDS);
 	}
 
-	private void stopProcess(String projectName, Process process) throws InterruptedException, IOException {
-		if (process.isAlive()) {
-			process.destroy();
-			if (!waitForProcessExit(process, 10)) {
-				process.destroyForcibly();
-			}
-		}
-		activeProcesses.remove(projectName);
-	}
-
 	private void waitForPortClosed(String projectName, int timeoutSec) throws InterruptedException, IOException {
 		long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
 		while (System.currentTimeMillis() < deadline) {
@@ -523,6 +488,7 @@ public class ProcessService {
 	private void cleanup(String projectName) throws IOException {
 		activeProcesses.remove(projectName);
 		Files.deleteIfExists(Path.of(pidsRoot, projectName + ".pid"));
+		Files.deleteIfExists(managedMarkerPath(projectName));
 	}
 
 	private void applyJvmOpts(ProcessBuilder processBuilder, ProjectConfig project) {
@@ -580,12 +546,6 @@ public class ProcessService {
 		return LogFileReader.readLastLines(logFile, lines);
 	}
 
-	private void writePid(String name, long pid) throws IOException {
-		Path pidsPath = Path.of(pidsRoot);
-		Files.createDirectories(pidsPath);
-		Files.writeString(pidsPath.resolve(name + ".pid"), String.valueOf(pid));
-	}
-
 	private long readPid(String name) throws IOException {
 		return Long.parseLong(Files.readString(Path.of(pidsRoot, name + ".pid")).trim());
 	}
@@ -600,12 +560,13 @@ public class ProcessService {
 		}
 	}
 
-	private boolean waitForProcessExit(Process process, int timeoutSec) throws InterruptedException {
-		return process.waitFor(timeoutSec, TimeUnit.SECONDS) && !process.isAlive();
-	}
-
 	private boolean isWindows() {
 		return System.getProperty("os.name").toLowerCase().contains("win");
+	}
+
+	@FunctionalInterface
+	private interface StopAction {
+		void run() throws IOException, InterruptedException;
 	}
 
 }

@@ -29,7 +29,8 @@ async function main() {
   console.log('[build-desktop] 2/4 Syncing static assets to backend...')
   await run('node', [path.join(__dirname, 'sync-static.cjs')], rootDir)
 
-  console.log('[build-desktop] 3/4 Packaging backend JAR...')
+  console.log('[build-desktop] 3/4 Running backend tests and packaging JAR...')
+  await run(mvnw, ['test', '-q'], backendDir)
   await run(mvnw, ['package', '-DskipTests', '-q'], backendDir)
 
   console.log(`[build-desktop] 4/4 Building Electron app (output: ${outputDir}/)...`)

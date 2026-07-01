@@ -67,8 +67,10 @@ class TomcatInstanceManagementServiceTest {
 				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
 				instancesRoot.toString(), xmlConfiguratorService);
+		CatalinaHomeResolver catalinaHomeResolver = new CatalinaHomeResolver(
+				new TomcatDiscoveryService(), catalinaHome.toString());
 		serverXmlService = new ServerXmlService(
-				catalinaHome.toString(),
+				catalinaHomeResolver,
 				"PathGateway",
 				nativeTomcatEnvironmentService);
 		PathGatewayService pathGatewayService = new PathGatewayService(
@@ -80,7 +82,7 @@ class TomcatInstanceManagementServiceTest {
 				instancesRoot.toString(),
 				tempDir.resolve("fragments").toString(),
 				tempDir.resolve("native-base").toString(),
-				catalinaHome.toString());
+				catalinaHomeResolver);
 		configService = new ConfigService(serverXmlService, migrationService);
 		ReflectionTestUtils.setField(configService, "configPath",
 				tempDir.resolve("projects.json").toString());

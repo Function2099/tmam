@@ -25,12 +25,14 @@ class ConfigMigrationServiceTest {
 
 	@BeforeEach
 	void setUp() {
+		CatalinaHomeResolver catalinaHomeResolver = new CatalinaHomeResolver(
+				new TomcatDiscoveryService(), "C:/tomcat-default");
 		migrationService = new ConfigMigrationService(
 				tempDir.resolve("projects.json").toString(),
 				tempDir.resolve("instances").toString(),
 				tempDir.resolve("legacy-fragments").toString(),
 				tempDir.resolve("legacy-native").toString(),
-				"C:/tomcat-default");
+				catalinaHomeResolver);
 	}
 
 	@Test

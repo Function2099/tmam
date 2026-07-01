@@ -35,23 +35,20 @@ public class ServerXmlService {
 	private static final String HEADER_FILE = "server-header.xml";
 	private static final Pattern SERVER_PORT_PATTERN = Pattern.compile("<Server\\s+port=\"(\\d+)\"");
 
-	private final String defaultCatalinaHome;
+	private final CatalinaHomeResolver catalinaHomeResolver;
 	private final String pathGatewayServiceName;
 	private final NativeTomcatEnvironmentService nativeTomcatEnvironmentService;
 
-	public ServerXmlService(@Value("${tmam.default-catalina-home}") String defaultCatalinaHome,
+	public ServerXmlService(CatalinaHomeResolver catalinaHomeResolver,
 			@Value("${tmam.path-gateway.service-name:PathGateway}") String pathGatewayServiceName,
 			NativeTomcatEnvironmentService nativeTomcatEnvironmentService) {
-		this.defaultCatalinaHome = defaultCatalinaHome;
+		this.catalinaHomeResolver = catalinaHomeResolver;
 		this.pathGatewayServiceName = pathGatewayServiceName;
 		this.nativeTomcatEnvironmentService = nativeTomcatEnvironmentService;
 	}
 
 	public Path resolveCatalinaHome(String catalinaHome) {
-		if (catalinaHome != null && !catalinaHome.isBlank()) {
-			return Path.of(catalinaHome);
-		}
-		return Path.of(defaultCatalinaHome);
+		return catalinaHomeResolver.resolvePath(catalinaHome);
 	}
 
 	public Path serverXmlPath(String catalinaHome) {

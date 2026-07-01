@@ -41,7 +41,7 @@ public class ProcessService {
 
 	private final String instancesRoot;
 	private final String pidsRoot;
-	private final String defaultCatalinaHome;
+	private final CatalinaHomeResolver catalinaHomeResolver;
 	private final ConfigService configService;
 	private final int startupTimeoutSec;
 	private final NativeTomcatEnvironmentService nativeTomcatEnvironmentService;
@@ -50,13 +50,13 @@ public class ProcessService {
 
 	public ProcessService(@Value("${tmam.instances-root}") String instancesRoot,
 			@Value("${tmam.pids-root}") String pidsRoot,
-			@Value("${tmam.default-catalina-home}") String defaultCatalinaHome,
+			CatalinaHomeResolver catalinaHomeResolver,
 			@Value("${tmam.startup-timeout-sec:30}") int startupTimeoutSec,
 			ConfigService configService,
 			NativeTomcatEnvironmentService nativeTomcatEnvironmentService) {
 		this.instancesRoot = instancesRoot;
 		this.pidsRoot = pidsRoot;
-		this.defaultCatalinaHome = defaultCatalinaHome;
+		this.catalinaHomeResolver = catalinaHomeResolver;
 		this.startupTimeoutSec = startupTimeoutSec;
 		this.configService = configService;
 		this.nativeTomcatEnvironmentService = nativeTomcatEnvironmentService;
@@ -296,10 +296,7 @@ public class ProcessService {
 	}
 
 	private String resolveInstanceCatalinaHome(TomcatInstanceConfig instance) {
-		if (instance.getCatalinaHome() != null && !instance.getCatalinaHome().isBlank()) {
-			return instance.getCatalinaHome();
-		}
-		return defaultCatalinaHome;
+		return catalinaHomeResolver.resolve(instance.getCatalinaHome());
 	}
 
 	public boolean isServicePortListening(String address, int port) {
@@ -508,10 +505,7 @@ public class ProcessService {
 	}
 
 	private String resolveCatalinaHome(ProjectConfig project) {
-		if (project.getCatalinaHome() != null && !project.getCatalinaHome().isBlank()) {
-			return project.getCatalinaHome();
-		}
-		return defaultCatalinaHome;
+		return catalinaHomeResolver.resolve(project.getCatalinaHome());
 	}
 
 	private Path resolveLogFile(Path catalinaBase) throws IOException {

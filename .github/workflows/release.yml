@@ -43,11 +43,22 @@ jobs:
         run: |
           cd frontend
           npm ci
-          node ../scripts/build-desktop.cjs
+          node ../scripts/build-desktop.cjs build1
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" release-body.md
+          else
+            echo "Release ${GITHUB_REF_NAME}" > release-body.md
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: release-body.md
           files: |
-            build/TMAM Setup *.exe
+            build1/TMAM Setup *.exe

@@ -26,19 +26,19 @@ public class ConfigMigrationService {
 	private final String instancesRoot;
 	private final String legacyFragmentsRoot;
 	private final String legacyNativeBase;
-	private final String defaultCatalinaHome;
+	private final CatalinaHomeResolver catalinaHomeResolver;
 
 	public ConfigMigrationService(
 			@Value("${tmam.config-path}") String configPath,
 			@Value("${tmam.instances-root}") String instancesRoot,
 			@Value("${tmam.server-xml-fragments}") String legacyFragmentsRoot,
 			@Value("${tmam.native-catalina-base}") String legacyNativeBase,
-			@Value("${tmam.default-catalina-home}") String defaultCatalinaHome) {
+			CatalinaHomeResolver catalinaHomeResolver) {
 		this.configPath = configPath;
 		this.instancesRoot = instancesRoot;
 		this.legacyFragmentsRoot = legacyFragmentsRoot;
 		this.legacyNativeBase = legacyNativeBase;
-		this.defaultCatalinaHome = defaultCatalinaHome;
+		this.catalinaHomeResolver = catalinaHomeResolver;
 	}
 
 	public boolean migrateIfNeeded(TmamConfig config) throws IOException {
@@ -56,10 +56,7 @@ public class ConfigMigrationService {
 
 		TomcatInstanceConfig defaultInstance = new TomcatInstanceConfig();
 		defaultInstance.setId(TomcatInstanceConfig.DEFAULT_ID);
-		String home = config.getCatalinaHome();
-		if (home == null || home.isBlank()) {
-			home = defaultCatalinaHome;
-		}
+		String home = catalinaHomeResolver.resolve(config.getCatalinaHome());
 		defaultInstance.setCatalinaHome(home);
 		defaultInstance.setDisplayName(Path.of(home).getFileName().toString());
 		defaultInstance.setShutdownPort(8005);

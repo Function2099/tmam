@@ -32,13 +32,14 @@ public class NginxConfigService {
 
 	public NginxConfigService(
 			@Value("${tmam.nginx.enabled:true}") boolean enabled,
-			@Value("${tmam.nginx.executable:C:/nginx/nginx.exe}") String executable,
+			@Value("${tmam.nginx.executable:}") String configuredExecutable,
 			@Value("${tmam.nginx.config-path}") String configPath,
 			@Value("${tmam.nginx.locations-fragment}") String locationsFragment,
 			@Value("${tmam.nginx.listen-port:80}") int listenPort,
-			@Value("${tmam.nginx.upstream-host:127.0.0.1}") String upstreamHost) {
+			@Value("${tmam.nginx.upstream-host:127.0.0.1}") String upstreamHost,
+			NginxDiscoveryService nginxDiscoveryService) {
 		this.enabled = enabled;
-		this.executable = executable;
+		this.executable = resolveExecutable(configuredExecutable, nginxDiscoveryService);
 		this.configPath = Path.of(configPath);
 		this.locationsFragment = Path.of(locationsFragment);
 		this.listenPort = listenPort;
@@ -52,7 +53,15 @@ public class NginxConfigService {
 				tempDir.resolve("nginx/nginx.conf").toString(),
 				tempDir.resolve("nginx/tmam-locations.conf").toString(),
 				80,
-				"127.0.0.1");
+				"127.0.0.1",
+				new NginxDiscoveryService());
+	}
+
+	private static String resolveExecutable(String configured, NginxDiscoveryService discoveryService) {
+		if (configured != null && !configured.isBlank()) {
+			return configured.trim();
+		}
+		return discoveryService.discover().orElse("");
 	}
 
 	public boolean isEnabled() {

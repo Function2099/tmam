@@ -20,13 +20,13 @@ Phase 2 讓新系統透過 TMAM 新增，**不需**修改網卡 IP。
 ### 環境前置
 
 1. 安裝 [Nginx for Windows](https://nginx.org/en/download.html)
-2. 在 `backend/src/main/resources/application.yml` 設定：
+2. TMAM 會自動偵測 Nginx（`NGINX_HOME`、PATH 或常見安裝路徑）。若偵測不到，可在 `application.yml` 覆寫：
 
 ```yaml
 tmam:
   nginx:
     enabled: true
-    executable: "C:/nginx/nginx.exe"
+    # executable: "D:/tools/nginx/nginx.exe"
     listen-port: 80
 ```
 

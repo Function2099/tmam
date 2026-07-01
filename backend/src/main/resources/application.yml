@@ -10,7 +10,7 @@ tmam:
   config-path: ${user.home}/.tmam/projects.json
   instances-root: ${user.home}/.tmam/instances
   pids-root: ${user.home}/.tmam/pids
-  default-catalina-home: "C:/Program Files/apache-tomcat-9.0.115"
+  # default-catalina-home:  # 選填；未設定時依 CATALINA_HOME 或本機掃描自動偵測
   server-xml-backup: ${user.home}/.tmam/backups/server.xml.tmam-original
   server-xml-fragments: ${user.home}/.tmam/server-fragments
   native-catalina-base: ${user.home}/.tmam/native-tomcat
@@ -18,7 +18,7 @@ tmam:
   app-log-path: ${user.home}/.tmam/logs/tmam-backend.log
   nginx:
     enabled: true
-    executable: "C:/nginx/nginx.exe"
+    # executable:  # 選填；未設定時依 NGINX_HOME、PATH 或常見安裝路徑自動偵測
     config-path: ${user.home}/.tmam/nginx/nginx.conf
     locations-fragment: ${user.home}/.tmam/nginx/tmam-locations.conf
     listen-port: 80

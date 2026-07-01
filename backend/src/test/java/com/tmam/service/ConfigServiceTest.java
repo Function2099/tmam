@@ -34,8 +34,10 @@ class ConfigServiceTest {
 				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
 				tempDir.resolve("instances").toString(), xmlConfiguratorService);
+		CatalinaHomeResolver catalinaHomeResolver = new CatalinaHomeResolver(
+				new TomcatDiscoveryService(), "C:/Program Files/apache-tomcat-9.0.115");
 		ServerXmlService serverXmlService = new ServerXmlService(
-				"C:/Program Files/apache-tomcat-9.0.115",
+				catalinaHomeResolver,
 				"PathGateway",
 				nativeTomcatEnvironmentService);
 		ConfigMigrationService migrationService = new ConfigMigrationService(
@@ -43,7 +45,7 @@ class ConfigServiceTest {
 				tempDir.resolve("instances").toString(),
 				tempDir.resolve("fragments").toString(),
 				tempDir.resolve("native-base").toString(),
-				"C:/Program Files/apache-tomcat-9.0.115");
+				catalinaHomeResolver);
 		configService = new ConfigService(serverXmlService, migrationService);
 		ReflectionTestUtils.setField(configService, "configPath",
 				tempDir.resolve("projects.json").toString());

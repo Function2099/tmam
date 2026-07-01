@@ -63,7 +63,7 @@ npm run electron:dev:full
 
 新增系統可走 **路徑型（PATH_PROXY）**，不需在網卡新增 IP：
 
-1. 安裝 Nginx，並在 `application.yml` 設定 `tmam.nginx.executable`
+1. 安裝 Nginx（TMAM 會自動從 `NGINX_HOME`、PATH 或常見安裝路徑偵測 `nginx.exe`；亦可於 `application.yml` 手動覆寫 `tmam.nginx.executable`）
 2. 在 **Service 管理** 點 **新增路徑型系統**，填寫路徑前綴與 webapp 目錄
 3. 點 **套用勾選並啟動**
 
@@ -85,13 +85,13 @@ npm run electron:dev:full
 ```yaml
 tmam:
   mode: native
-  default-catalina-home: "C:/Program Files/apache-tomcat-9.0.115"
   startup-timeout-sec: 90
   nginx:
     enabled: true
-    executable: "C:/nginx/nginx.exe"
     listen-port: 80
 ```
+
+Tomcat 與 Nginx 安裝路徑**預設自動偵測**（Tomcat：UI 選擇後存於 `projects.json`，或 `CATALINA_HOME`、本機掃描；Nginx：`NGINX_HOME`、PATH、常見路徑）。僅在自動偵測不符合環境時，才於 `application.yml` 設定 `tmam.default-catalina-home` 或 `tmam.nginx.executable` 覆寫。
 
 ## API 端點（Native 模式）
 

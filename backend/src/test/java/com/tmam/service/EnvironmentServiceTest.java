@@ -29,9 +29,11 @@ class EnvironmentServiceTest {
 		Path catalinaHome = tempDir.resolve("catalina-home");
 		var xmlService = new XmlConfiguratorService(
 				new DefaultResourceLoader().getResource("classpath:server-template.xml"));
+		CatalinaHomeResolver catalinaHomeResolver = new CatalinaHomeResolver(
+				new TomcatDiscoveryService(), catalinaHome.toString());
 		environmentService = new EnvironmentService(
 				instancesRoot.toString(),
-				catalinaHome.toString(),
+				catalinaHomeResolver,
 				xmlService);
 	}
 

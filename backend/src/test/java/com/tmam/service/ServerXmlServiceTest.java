@@ -39,7 +39,7 @@ class ServerXmlServiceTest {
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
 				instancesRoot.toString(), xmlConfiguratorService);
 		serverXmlService = new ServerXmlService(
-				tempDir.toString(),
+				new CatalinaHomeResolver(new TomcatDiscoveryService(), tempDir.toString()),
 				"PathGateway",
 				nativeTomcatEnvironmentService);
 		pathGatewayService = new PathGatewayService(

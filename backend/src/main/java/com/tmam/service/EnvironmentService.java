@@ -17,14 +17,14 @@ public class EnvironmentService {
 	private static final List<String> INSTANCE_DIRS = List.of("conf", "logs", "temp", "work", "webapps");
 
 	private final String instancesRoot;
-	private final String defaultCatalinaHome;
+	private final CatalinaHomeResolver catalinaHomeResolver;
 	private final XmlConfiguratorService xmlConfiguratorService;
 
 	public EnvironmentService(@Value("${tmam.instances-root}") String instancesRoot,
-			@Value("${tmam.default-catalina-home}") String defaultCatalinaHome,
+			CatalinaHomeResolver catalinaHomeResolver,
 			XmlConfiguratorService xmlConfiguratorService) {
 		this.instancesRoot = instancesRoot;
-		this.defaultCatalinaHome = defaultCatalinaHome;
+		this.catalinaHomeResolver = catalinaHomeResolver;
 		this.xmlConfiguratorService = xmlConfiguratorService;
 	}
 
@@ -46,10 +46,7 @@ public class EnvironmentService {
 	}
 
 	private String resolveCatalinaHome(ProjectConfig project) {
-		if (project.getCatalinaHome() != null && !project.getCatalinaHome().isBlank()) {
-			return project.getCatalinaHome();
-		}
-		return defaultCatalinaHome;
+		return catalinaHomeResolver.resolve(project.getCatalinaHome());
 	}
 
 	private void deployWar(ProjectConfig project, Path catalinaBase) throws IOException {

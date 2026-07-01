@@ -31,12 +31,13 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          node -e "
+          VERSION="$VERSION" node -e "
             const fs = require('fs');
             const path = 'frontend/package.json';
             const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
             pkg.version = process.env.VERSION;
             fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+            console.log('Set package.json version to', pkg.version);
           "
 
       - name: Build desktop installer

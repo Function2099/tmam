@@ -29,6 +29,7 @@
     "@vitejs/plugin-vue": "^6.0.6",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.0",
+    "rcedit": "^5.0.2",
     "vite": "^8.0.12"
   },
   "build": {
@@ -40,6 +41,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/TMAM.bat",
       "package.json"
     ],
     "extraResources": [
@@ -48,11 +50,14 @@
         "to": "backend.jar"
       }
     ],
+    "afterPack": "./electron/afterPack.cjs",
+    "afterAllArtifactBuild": "./electron/afterAllArtifactBuild.cjs",
     "win": {
       "signAndEditExecutable": false,
+      "requestedExecutionLevel": "requireAdministrator",
       "target": [
         {
-          "target": "nsis",
+          "target": "dir",
           "arch": [
             "x64"
           ]

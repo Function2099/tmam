@@ -29,9 +29,7 @@ class PathGatewayServiceTest {
 	void setUp() {
 		Path instancesRoot = tempDir.resolve("instances");
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
-				instancesRoot.toString(),
-				new XmlConfiguratorService(
-						new org.springframework.core.io.ClassPathResource("server-template.xml")));
+				instancesRoot.toString());
 		pathGatewayService = new PathGatewayService(
 				"PathGateway",
 				"127.0.0.1",
@@ -54,10 +52,39 @@ class PathGatewayServiceTest {
 
 		String fragment = Files.readString(pathGatewayService.fragmentPath(INSTANCE_ID));
 		assertTrue(fragment.contains("<Service name=\"PathGateway\">"));
+		assertTrue(fragment.contains("defaultHost=\"localhost\""));
+		assertTrue(fragment.contains("<Host name=\"localhost\""));
+		assertTrue(fragment.contains("<Alias>127.0.0.1</Alias>"));
 		assertTrue(fragment.contains("address=\"127.0.0.1\""));
 		assertTrue(fragment.contains("port=\"8080\""));
 		assertTrue(fragment.contains("path=\"/new-system\""));
+		assertTrue(fragment.contains("sessionCookiePath=\"/\""));
 		assertTrue(fragment.contains(docBase.toString()));
+		assertTrue(fragment.contains("name=\"tmam.online\""));
+		assertTrue(fragment.contains("value=\"false\""));
+		assertTrue(fragment.contains("startStopThreads=\"0\""));
+		assertTrue(fragment.contains("autoDeploy=\"false\""));
+		assertTrue(fragment.contains("<JarScanner"));
+	}
+
+	@Test
+	void writeFragmentIncludesOnlineParameterWhenEnabled() throws Exception {
+		Path docBase = tempDir.resolve("webapp-online");
+		Files.createDirectories(docBase);
+
+		TomcatServiceConfig service = new TomcatServiceConfig();
+		service.setName("Prod_System");
+		service.setType(TomcatServiceType.PATH_PROXY);
+		service.setPathPrefix("/prod");
+		service.setDocBase(docBase.toString());
+		service.setEnabled(true);
+		service.setOnline(true);
+
+		pathGatewayService.writeFragment(INSTANCE_ID, 8080, List.of(service));
+
+		String fragment = Files.readString(pathGatewayService.fragmentPath(INSTANCE_ID));
+		assertTrue(fragment.contains("name=\"tmam.online\""));
+		assertTrue(fragment.contains("value=\"true\""));
 	}
 
 	@Test

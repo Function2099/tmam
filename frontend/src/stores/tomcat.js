@@ -45,10 +45,22 @@ export const useTomcatStore = defineStore('tomcat', () => {
   async function refreshStatus() {
     if (!currentTomcatId.value) return
 
+    const id = currentTomcatId.value
     try {
-      const { data } = await tomcatsApi.status(currentTomcatId.value)
-      tomcatStatus.value = data?.status ?? 'STOPPED'
-      externallyManaged.value = !!data?.externallyManaged
+      const [statusRes, servicesRes] = await Promise.all([
+        tomcatsApi.status(id),
+        tomcatsApi.services(id),
+      ])
+      tomcatStatus.value = statusRes.data?.status ?? 'STOPPED'
+      externallyManaged.value = !!statusRes.data?.externallyManaged
+
+      // 只同步後端狀態欄位，保留使用者尚未套用的 checkbox 勾選
+      const remote = servicesRes.data ?? []
+      const statusByName = Object.fromEntries(remote.map((s) => [s.name, s.status]))
+      services.value = services.value.map((service) => ({
+        ...service,
+        status: statusByName[service.name] ?? service.status,
+      }))
     } catch {
       tomcatStatus.value = 'STOPPED'
       externallyManaged.value = false

@@ -1,10 +1,15 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import 'element-plus/dist/index.css'
 import App from './App.vue'
 import router from './router'
 import './style.css'
+
+router.onError((error) => {
+  console.error(error)
+  ElMessage.error(`頁面載入失敗：${error?.message || '未知錯誤'}`)
+})
 
 const app = createApp(App)
 app.use(createPinia())

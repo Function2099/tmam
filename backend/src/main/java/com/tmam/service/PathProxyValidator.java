@@ -27,6 +27,61 @@ public final class PathProxyValidator {
 		return normalized;
 	}
 
+	/**
+	 * 正規化舊式絕對路徑清單：去除空白項、補齊斜線並去除重複。
+	 */
+	public static java.util.List<String> normalizeLegacyPaths(Collection<String> legacyPaths) {
+		if (legacyPaths == null) {
+			return java.util.List.of();
+		}
+		java.util.LinkedHashSet<String> normalized = new java.util.LinkedHashSet<>();
+		for (String path : legacyPaths) {
+			if (path == null || path.isBlank()) {
+				continue;
+			}
+			String value = normalizePathPrefix(path);
+			if ("/".equals(value)) {
+				throw new IllegalArgumentException("子路徑不可填根路徑 /");
+			}
+			normalized.add(value);
+		}
+		return java.util.List.copyOf(normalized);
+	}
+
+	/**
+	 * 子路徑不可與任何系統的路徑前綴相同，否則會蓋掉該系統的入口。
+	 * 多個系統可填相同的共用路徑（例如前台／後台都引用 /images）；Nginx 產生設定時會去重。
+	 */
+	public static void validateLegacyPathsAcrossInstances(java.util.List<String> legacyPaths, TmamConfig config,
+			String excludeName) {
+		if (legacyPaths.isEmpty()) {
+			return;
+		}
+		for (TomcatInstanceConfig instance : config.getTomcatInstances().values()) {
+			for (TomcatServiceConfig service : instance.getServices().values()) {
+				if (!service.isPathProxy()) {
+					continue;
+				}
+				String prefix = service.getPathPrefix() != null ? normalizePathPrefix(service.getPathPrefix()) : null;
+				if (prefix == null) {
+					continue;
+				}
+				boolean isSelf = service.getName().equals(excludeName);
+				for (String path : legacyPaths) {
+					if (prefix.equals(path)) {
+						if (isSelf) {
+							throw new IllegalArgumentException("子路徑不可與本系統路徑前綴相同: " + path);
+						}
+						String label = service.getDisplayName() != null && !service.getDisplayName().isBlank()
+								? service.getDisplayName()
+								: service.getName();
+						throw new IllegalArgumentException("子路徑與系統「" + label + "」的路徑前綴衝突: " + path);
+					}
+				}
+			}
+		}
+	}
+
 	public static void validateName(String name, Collection<TomcatServiceConfig> existing, String excludeName) {
 		if (name == null || !name.matches("[A-Za-z0-9_\\-]+")) {
 			throw new IllegalArgumentException("系統名稱僅允許英數、底線與連字號");
@@ -158,6 +213,23 @@ public final class PathProxyValidator {
 
 	public static String nginxLocationPrefix(String pathPrefix) {
 		return normalizePathPrefix(pathPrefix) + "/";
+	}
+
+	/**
+	 * 路徑型首頁，相對於前綴（例如 index_Login.jsp → /clbu_leeten/index_Login.jsp）。
+	 */
+	public static String normalizeIndexPage(String indexPage) {
+		if (indexPage == null || indexPage.isBlank()) {
+			return "";
+		}
+		String value = indexPage.trim().replace('\\', '/');
+		while (value.startsWith("/")) {
+			value = value.substring(1);
+		}
+		if (value.isBlank() || value.contains("..") || value.contains("://")) {
+			throw new IllegalArgumentException("首頁檔名無效: " + indexPage);
+		}
+		return value;
 	}
 
 	public static Collection<TomcatServiceConfig> allServices(TmamConfig config) {

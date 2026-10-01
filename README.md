@@ -48,7 +48,7 @@ npm run electron:dev:full
 2. 首頁顯示 **Tomcat 實例列表**；可再新增其他 Tomcat 安裝路徑。
 3. 點 **管理 Service** 進入該實例，勾選要啟動的 Service。
 4. 點 **套用勾選並啟動**；各實例可獨立啟停。
-5. **新增系統** 可選路徑型（Nginx）或 IP 型（需網卡 IP）。
+5. **新增系統** 可選路徑型（Nginx）或 IP 型（共用網卡 IP、以 port 區分）。
 
 從 v1 升級的使用者會自動遷移既有 `catalinaHome` 設定（見 MULTI_TOMCAT.md）。
 

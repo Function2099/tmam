@@ -55,8 +55,8 @@ public class ServerXmlService {
 		return resolveCatalinaHome(catalinaHome).resolve("conf/server.xml");
 	}
 
-	public Path effectiveServerXmlPath(String instanceId) throws IOException {
-		return nativeTomcatEnvironmentService.getCatalinaBase(instanceId).resolve("conf/server.xml");
+	public Path effectiveServerXmlPath(String catalinaHome) {
+		return serverXmlPath(catalinaHome);
 	}
 
 	public Path backupPath(String instanceId, String catalinaHome) {
@@ -135,6 +135,84 @@ public class ServerXmlService {
 		Files.writeString(fragments.resolve(serviceName + ".xml"), fragment);
 	}
 
+	/**
+	 * 就地更新匯入的 IP 型 Service 片段，保留原有 Connector / Context / Valve 等設定，
+	 * 避免用簡化模板覆寫後把 docBase、sessionCookieName 等清掉。
+	 */
+	public void patchLegacyIpFragment(String instanceId, String serviceName, TomcatServiceConfig service)
+			throws IOException {
+		Path fragmentFile = fragmentsDir(instanceId).resolve(serviceName + ".xml");
+		if (!Files.exists(fragmentFile)) {
+			throw new IOException("Missing service fragment: " + serviceName);
+		}
+		String content = Files.readString(fragmentFile);
+		String updated = content;
+
+		if (service.getAddress() != null && !service.getAddress().isBlank()) {
+			updated = replaceXmlAttr(updated, "address", service.getAddress().trim());
+		}
+		if (service.getPort() > 0) {
+			updated = replaceXmlAttr(updated, "port", String.valueOf(service.getPort()));
+		}
+		if (service.getDocBase() != null && !service.getDocBase().isBlank()) {
+			updated = replaceXmlAttr(updated, "docBase", service.getDocBase().trim());
+		}
+		updated = upsertTmamOnlineParameter(updated, service.isOnline());
+
+		Files.writeString(fragmentFile, updated);
+		log.info("[patchLegacyIpFragment] instance={} service={} 已就地更新片段", instanceId, serviceName);
+	}
+
+	/**
+	 * 從既有 fragment 讀取 docBase；若設定檔遺失可回填。
+	 */
+	public String readDocBaseFromFragment(String instanceId, String serviceName) throws IOException {
+		Path fragmentFile = fragmentsDir(instanceId).resolve(serviceName + ".xml");
+		if (!Files.exists(fragmentFile)) {
+			return null;
+		}
+		Matcher matcher = Pattern.compile("docBase=\"([^\"]*)\"").matcher(Files.readString(fragmentFile));
+		if (!matcher.find()) {
+			return null;
+		}
+		String docBase = matcher.group(1);
+		return docBase.isBlank() ? null : docBase;
+	}
+
+	private static String replaceXmlAttr(String xml, String attrName, String value) {
+		String escaped = value.replace("&", "&amp;")
+				.replace("\"", "&quot;")
+				.replace("<", "&lt;")
+				.replace(">", "&gt;");
+		// 屬性名必須獨立，避免改 port 時連 redirectPort 一起被替換
+		Pattern pattern = Pattern.compile("(?<![\\w:-])" + Pattern.quote(attrName) + "=\"[^\"]*\"");
+		return pattern.matcher(xml).replaceAll(attrName + "=\"" + Matcher.quoteReplacement(escaped) + "\"");
+	}
+
+	private static String upsertTmamOnlineParameter(String xml, boolean online) {
+		String value = online ? "true" : "false";
+		Pattern existing = Pattern.compile(
+				"<Parameter\\s+name=\"tmam\\.online\"\\s+value=\"(?:true|false)\"\\s+override=\"false\"\\s*/>");
+		Matcher matcher = existing.matcher(xml);
+		String parameter = "<Parameter name=\"tmam.online\" value=\"" + value + "\" override=\"false\"/>";
+		if (matcher.find()) {
+			return matcher.replaceFirst(Matcher.quoteReplacement(parameter));
+		}
+		int contextClose = xml.indexOf("</Context>");
+		if (contextClose < 0) {
+			// 自閉合 Context：改成有子元素的形式
+			Pattern selfClosing = Pattern.compile("<Context([^>]*)\\s*/>");
+			Matcher self = selfClosing.matcher(xml);
+			if (self.find()) {
+				String replacement = "<Context" + self.group(1) + ">\n          " + parameter
+						+ "\n        </Context>";
+				return self.replaceFirst(Matcher.quoteReplacement(replacement));
+			}
+			return xml;
+		}
+		return xml.substring(0, contextClose) + "    " + parameter + "\n    " + xml.substring(contextClose);
+	}
+
 	public void deleteServiceFragment(String instanceId, String serviceName) throws IOException {
 		Files.deleteIfExists(fragmentsDir(instanceId).resolve(serviceName + ".xml"));
 	}
@@ -155,7 +233,8 @@ public class ServerXmlService {
 			throw new IOException("Service fragments not imported. Run import first.");
 		}
 
-		StringBuilder content = new StringBuilder(Files.readString(headerFile)).append("\n");
+		StringBuilder content = new StringBuilder(
+				TomcatStartupOptimizer.optimizeServerHeader(Files.readString(headerFile))).append("\n");
 		for (TomcatServiceConfig service : services.values()) {
 			if (!service.isLegacyIp() || !service.isEnabled()) {
 				continue;
@@ -164,7 +243,8 @@ public class ServerXmlService {
 			if (!Files.exists(fragmentFile)) {
 				throw new IOException("Missing service fragment: " + service.getName());
 			}
-			content.append(Files.readString(fragmentFile)).append("\n");
+			content.append(TomcatStartupOptimizer.optimizeServiceFragment(Files.readString(fragmentFile)))
+					.append("\n");
 		}
 
 		if (hasEnabledPathProxy) {
@@ -172,15 +252,20 @@ public class ServerXmlService {
 			if (!Files.exists(gatewayFragment)) {
 				throw new IOException("Missing PathGateway fragment. Add PATH_PROXY services first.");
 			}
-			content.append(Files.readString(gatewayFragment)).append("\n");
+			content.append(TomcatStartupOptimizer.optimizeServiceFragment(Files.readString(gatewayFragment)))
+					.append("\n");
 		}
 
 		content.append("</Server>\n");
 
-		nativeTomcatEnvironmentService.ensureInitialized(instanceId, catalinaHome);
-		Path target = effectiveServerXmlPath(instanceId);
-		Files.createDirectories(target.getParent());
-		Files.writeString(target, content.toString());
+		nativeTomcatEnvironmentService.ensureWritable(instanceId, catalinaHome);
+		Path target = effectiveServerXmlPath(catalinaHome);
+		try {
+			Files.writeString(target, content.toString());
+		}
+		catch (IOException ex) {
+			throw nativeTomcatEnvironmentService.wrapWriteFailure(target, ex);
+		}
 		log.info("[writeEffectiveServerXml] 已寫入 {}, 大小 {} bytes", target, content.length());
 	}
 
@@ -189,8 +274,14 @@ public class ServerXmlService {
 		if (!Files.exists(backup)) {
 			throw new IOException("Backup not found: " + backup);
 		}
-		Path target = effectiveServerXmlPath(instanceId);
-		Files.copy(backup, target, StandardCopyOption.REPLACE_EXISTING);
+		nativeTomcatEnvironmentService.ensureWritable(instanceId, catalinaHome);
+		Path target = effectiveServerXmlPath(catalinaHome);
+		try {
+			Files.copy(backup, target, StandardCopyOption.REPLACE_EXISTING);
+		}
+		catch (IOException ex) {
+			throw nativeTomcatEnvironmentService.wrapWriteFailure(target, ex);
+		}
 		log.info("[restoreOriginal] 已還原 {} -> {}", backup, target);
 	}
 
@@ -210,8 +301,14 @@ public class ServerXmlService {
 					service.setType(previous.getType());
 				}
 				service.setPathPrefix(previous.getPathPrefix());
-				service.setDocBase(previous.getDocBase());
+				// 保留先前明確設定的 docBase；否則沿用剛匯入 fragment 的值，避免用 null 覆蓋
+				if (previous.getDocBase() != null && !previous.getDocBase().isBlank()) {
+					service.setDocBase(previous.getDocBase());
+				}
 				service.setProxyStripPrefix(previous.isProxyStripPrefix());
+				service.setLegacyPaths(previous.getLegacyPaths());
+				service.setIndexPage(previous.getIndexPage());
+				service.setOnline(previous.isOnline());
 				if (previous.isUserCreated()) {
 					service.setUserCreated(true);
 				}

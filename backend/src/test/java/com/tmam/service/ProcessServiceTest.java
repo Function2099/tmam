@@ -10,11 +10,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.tmam.model.InstanceStatus;
@@ -34,10 +34,8 @@ class ProcessServiceTest {
 
 	@BeforeEach
 	void setUp() throws IOException {
-		XmlConfiguratorService xmlConfiguratorService = new XmlConfiguratorService(
-				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
-				tempDir.resolve("instances").toString(), xmlConfiguratorService);
+				tempDir.resolve("instances").toString());
 		CatalinaHomeResolver catalinaHomeResolver = new CatalinaHomeResolver(
 				new TomcatDiscoveryService(), "C:/Program Files/apache-tomcat-9.0.115");
 		ServerXmlService serverXmlService = new ServerXmlService(
@@ -60,7 +58,8 @@ class ProcessServiceTest {
 				catalinaHomeResolver,
 				30,
 				configService,
-				nativeTomcatEnvironmentService);
+				nativeTomcatEnvironmentService,
+				new WindowsTomcatService());
 	}
 
 	@Test
@@ -132,6 +131,88 @@ class ProcessServiceTest {
 
 		assertFalse(processService.isExternallyManaged(config, TomcatInstanceConfig.DEFAULT_ID,
 				InstanceStatus.RUNNING));
+	}
+
+	@Test
+	void hasNewStartupMarkerIgnoresOldSuccessLine() throws IOException {
+		Path logFile = tempDir.resolve("catalina.2026-08-18.log");
+		Files.writeString(logFile, "18-Aug-2026 11:16:37.506 Server startup in [86198] milliseconds\n");
+		long offset = Files.size(logFile);
+
+		assertFalse(ProcessService.hasNewStartupMarker(logFile, offset));
+
+		Files.writeString(logFile, Files.readString(logFile)
+				+ "18-Aug-2026 11:36:38.810 Server startup in [107479] milliseconds\n");
+		assertTrue(ProcessService.hasNewStartupMarker(logFile, offset));
+	}
+
+	@Test
+	void monitorStartupUnlimitedWaitsForLateMarker() throws Exception {
+		ReflectionTestUtils.setField(processService, "startupTimeoutSec", 0);
+		Path catalinaBase = tempDir.resolve("slow-base");
+		Path logsDir = catalinaBase.resolve("logs");
+		Files.createDirectories(logsDir);
+		Path logFile = logsDir.resolve("catalina.out");
+		Files.writeString(logFile, "starting\n");
+		long offset = Files.size(logFile);
+
+		Thread writer = new Thread(() -> {
+			try {
+				Thread.sleep(1200);
+				Files.writeString(logFile, Files.readString(logFile) + "Server startup in [999] milliseconds\n");
+			}
+			catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		});
+		writer.start();
+		StartResult result = (StartResult) ReflectionTestUtils.invokeMethod(
+				processService, "monitorStartup", "slow", catalinaBase, offset, (BooleanSupplier) () -> false);
+		writer.join();
+
+		assertTrue(result.success());
+	}
+
+	@Test
+	void monitorStartupStopsWaitingWhenProcessAborted() throws Exception {
+		Path catalinaBase = tempDir.resolve("dead-base");
+		Path logsDir = catalinaBase.resolve("logs");
+		Files.createDirectories(logsDir);
+		Files.writeString(logsDir.resolve("catalina.out"), "starting\n");
+
+		StartResult result = (StartResult) ReflectionTestUtils.invokeMethod(
+				processService, "monitorStartup", "dead", catalinaBase, 0L, (BooleanSupplier) () -> true);
+
+		assertFalse(result.success());
+		assertTrue(result.message().contains("啟動過程中行程已結束"));
+		assertFalse(result.message().contains("記憶體不足"));
+	}
+
+	@Test
+	void monitorStartupReportsNativeOutOfMemory() throws Exception {
+		Path catalinaBase = tempDir.resolve("oom-base");
+		Path logsDir = catalinaBase.resolve("logs");
+		Files.createDirectories(logsDir);
+		Files.writeString(logsDir.resolve("catalina.out"), "starting\n");
+		Files.writeString(catalinaBase.resolve("hs_err_pid5624.log"), """
+				#
+				# There is insufficient memory for the Java Runtime Environment to continue.
+				# Native memory allocation (malloc) failed to allocate 641008 bytes for Chunk::new
+				#  Out of Memory Error (arena.cpp:189), pid=5624, tid=21508
+				""");
+
+		StartResult result = (StartResult) ReflectionTestUtils.invokeMethod(
+				processService, "monitorStartup", "oom", catalinaBase, 0L, (BooleanSupplier) () -> true);
+
+		assertFalse(result.success());
+		assertTrue(result.message().contains("Java 原生記憶體不足"));
+	}
+
+	@Test
+	void jvmCrashHintRecognizesFatalError() {
+		assertTrue(ProcessService.jvmCrashHint("# A fatal error has been detected by the Java Runtime Environment:")
+				.contains("異常終止"));
+		assertEquals(null, ProcessService.jvmCrashHint("normal log"));
 	}
 
 }

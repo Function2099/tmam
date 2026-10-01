@@ -47,4 +47,4 @@ Nginx（單一進程）聚合所有實例的 PATH_PROXY → 各實例 gatewayPor
 ## 新增系統
 
 - **路徑型**：Nginx `:80` + PathGateway（實例 `gatewayPort`）
-- **IP 型**：需網卡綁定 IP；使用者自行新增的 IP 型可編輯/刪除，匯入的僅能勾選
+- **IP 型**：共用網卡 IP、以 port 區分；使用者自行新增的 IP 型可編輯/刪除，匯入的僅能勾選

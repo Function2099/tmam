@@ -24,6 +24,27 @@ class LegacyIpFragmentBuilderTest {
 		assertTrue(fragment.contains("address=\"192.168.10.99\""));
 		assertTrue(fragment.contains("port=\"9090\""));
 		assertTrue(fragment.contains("docBase=\"D:\\webapp\""));
+		assertTrue(fragment.contains("name=\"tmam.online\""));
+		assertTrue(fragment.contains("name=\"WebPath\""));
+		assertTrue(fragment.contains("value=\"false\""));
+		assertTrue(fragment.contains("startStopThreads=\"0\""));
+		assertTrue(fragment.contains("autoDeploy=\"false\""));
+		assertTrue(fragment.contains("<JarScanner"));
+	}
+
+	@Test
+	void buildsOnlineParameterWhenEnabled() {
+		TomcatServiceConfig service = new TomcatServiceConfig();
+		service.setName("Test_Service");
+		service.setType(TomcatServiceType.LEGACY_IP);
+		service.setAddress("192.168.10.99");
+		service.setPort(9090);
+		service.setDocBase("D:\\webapp");
+		service.setOnline(true);
+
+		String fragment = LegacyIpFragmentBuilder.build(service);
+
+		assertTrue(fragment.contains("value=\"true\""));
 	}
 
 }

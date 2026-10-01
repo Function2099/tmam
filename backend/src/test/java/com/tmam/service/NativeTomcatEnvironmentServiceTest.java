@@ -1,10 +1,10 @@
 package com.tmam.service;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -18,36 +18,74 @@ class NativeTomcatEnvironmentServiceTest {
 	Path tempDir;
 
 	private NativeTomcatEnvironmentService service;
-	private XmlConfiguratorService xmlConfiguratorService;
 
 	@BeforeEach
 	void setUp() {
-		xmlConfiguratorService = mock(XmlConfiguratorService.class);
-		service = new NativeTomcatEnvironmentService(tempDir.resolve("instances").toString(), xmlConfiguratorService);
+		service = new NativeTomcatEnvironmentService(tempDir.resolve("instances").toString());
 	}
 
 	@Test
-	void ensureInitializedSkipsRepeatCallsForSameInstance() throws Exception {
+	void getCatalinaBaseUsesInstallDirectory() {
+		Path catalinaHome = tempDir.resolve("tomcat-home");
+		assertEquals(catalinaHome.toAbsolutePath().normalize(),
+				service.getCatalinaBase(catalinaHome.toString()));
+	}
+
+	@Test
+	void ensureInitializedDoesNotCreateShadowCatalinaBase() throws Exception {
 		Path catalinaHome = tempDir.resolve("tomcat-home");
 		Files.createDirectories(catalinaHome.resolve("conf"));
+		Files.writeString(catalinaHome.resolve("conf/server.xml"), "<Server/>");
 
 		service.ensureInitialized("default", catalinaHome.toString());
 		service.ensureInitialized("default", catalinaHome.toString());
 
-		verify(xmlConfiguratorService, times(1)).copyFromHome(catalinaHome, service.getCatalinaBase("default"));
-		assertTrue(Files.isDirectory(service.getCatalinaBase("default").resolve("conf")));
+		assertTrue(Files.isDirectory(catalinaHome.resolve("conf")));
+		assertTrue(Files.notExists(tempDir.resolve("instances/default/catalina-base")));
+	}
+
+	@Test
+	void ensureInitializedRequiresConfDirectory() {
+		Path catalinaHome = tempDir.resolve("empty-home");
+		assertThrows(IOException.class,
+				() -> service.ensureInitialized("default", catalinaHome.toString()));
+	}
+
+	@Test
+	void ensureInitializedAllowsReadOnlyConf() throws Exception {
+		Path catalinaHome = tempDir.resolve("readonly-home");
+		Path serverXml = catalinaHome.resolve("conf/server.xml");
+		Files.createDirectories(serverXml.getParent());
+		Files.writeString(serverXml, "<Server/>");
+		assertTrue(serverXml.toFile().setReadOnly());
+
+		service.ensureInitialized("default", catalinaHome.toString());
+		assertThrows(java.nio.file.AccessDeniedException.class,
+				() -> service.ensureWritable("default", catalinaHome.toString()));
+	}
+
+	@Test
+	void wrapWriteFailureTurnsAccessDeniedIntoAdminHint() {
+		Path serverXml = tempDir.resolve("tomcat-home/conf/server.xml");
+		IOException wrapped = service.wrapWriteFailure(serverXml,
+				new java.nio.file.AccessDeniedException(serverXml.toString()));
+		assertTrue(wrapped instanceof java.nio.file.AccessDeniedException);
+		assertTrue(wrapped.getMessage().contains(NativeTomcatEnvironmentService.ADMIN_REQUIRED_HINT)
+				|| ((java.nio.file.AccessDeniedException) wrapped).getReason()
+						.contains(NativeTomcatEnvironmentService.ADMIN_REQUIRED_HINT));
 	}
 
 	@Test
 	void invalidateAllowsReinitialization() throws Exception {
 		Path catalinaHome = tempDir.resolve("tomcat-home");
 		Files.createDirectories(catalinaHome.resolve("conf"));
+		Files.writeString(catalinaHome.resolve("conf/server.xml"), "<Server/>");
 
 		service.ensureInitialized("default", catalinaHome.toString());
 		service.invalidate("default");
 		service.ensureInitialized("default", catalinaHome.toString());
 
-		verify(xmlConfiguratorService, times(2)).copyFromHome(catalinaHome, service.getCatalinaBase("default"));
+		assertTrue(Files.isDirectory(catalinaHome.resolve("conf")));
 	}
 
 }

@@ -6,12 +6,13 @@ const frontendDir = path.join(rootDir, 'frontend')
 const backendDir = path.join(rootDir, 'backend')
 const mvnw = path.join(backendDir, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw')
 
-function run(command, args, cwd) {
+function run(command, args, cwd, env = process.env) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
       stdio: 'inherit',
       shell: process.platform === 'win32',
+      env,
     })
     child.on('exit', (code) => {
       if (code === 0) resolve()
@@ -37,7 +38,8 @@ async function main() {
   await run(
     'npx',
     ['electron-builder', '--win', `--config.directories.output=../${outputDir}`],
-    frontendDir
+    frontendDir,
+    { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
   )
 
   console.log(`[build-desktop] Done. Output: ${outputDir}/`)

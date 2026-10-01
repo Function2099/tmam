@@ -2,7 +2,7 @@
 
 ## 背景
 
-Phase 1 管理既有的 9 個 `LEGACY_IP` Service，每個綁定獨立 IP（如 `192.168.10.10:36`）。  
+Phase 1 管理既有的 9 個 `LEGACY_IP` Service，皆綁定同一 IP、以 port 區分（如 `192.168.10.10:36`）。  
 Phase 2 讓新系統透過 TMAM 新增，**不需**修改網卡 IP。
 
 ## 架構
@@ -77,5 +77,5 @@ TMAM 會：
 | 項目 | Phase 1 | Phase 2 |
 |------|---------|---------|
 | 新增方式 | 僅匯入現有 server.xml | UI 新增 PATH_PROXY |
-| 網路 | 每 Service 一個 IP | Nginx :80 + 路徑區分 |
+| 網路 | 同一 IP、以 port 區分 | Nginx :80 + 路徑區分 |
 | server.xml | 僅 legacy 片段 | legacy + PathGateway |

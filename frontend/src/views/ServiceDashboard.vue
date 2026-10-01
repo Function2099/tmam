@@ -6,9 +6,7 @@
         <h2>{{ currentInstance?.displayName ?? tomcatId }} — Service 管理</h2>
         <el-tag :type="tomcatTagType" size="large">{{ tomcatStatusLabel }}</el-tag>
         <el-tag v-if="externallyManaged" type="warning" size="small">非 TMAM 啟動</el-tag>
-        <el-tag v-if="nginxStatus" :type="nginxStatus.available ? 'success' : 'info'" size="small">
-          Nginx {{ nginxStatus.available ? '可用' : '未安裝' }}
-        </el-tag>
+        <NginxStatusBadge ref="nginxBadge" />
       </div>
       <div class="toolbar-actions">
         <el-button type="success" @click="openCreateDialog">新增系統</el-button>
@@ -19,18 +17,23 @@
         <el-button type="danger" :loading="actionLoading" :disabled="!isRunning" @click="handleStop">
           全部停止
         </el-button>
-        <el-button @click="$router.push(`/tomcats/${tomcatId}/logs`)">查看 Log</el-button>
+        <el-button @click="goLogs">查看 Log</el-button>
+        <el-button @click="openLogsFolder">開啟 Log 資料夾</el-button>
       </div>
     </div>
 
-    <p v-if="currentInstance" class="instance-meta">{{ currentInstance.catalinaHome }}</p>
+    <p v-if="currentInstance" class="instance-meta">
+      {{ currentInstance.catalinaHome }}
+      <br />
+      <el-button link type="primary" @click="openLogsFolder">logs: {{ tomcatLogsDir }}</el-button>
+    </p>
 
     <el-alert
       type="info"
       :closable="false"
       show-icon
       class="hint-alert"
-      title="此 Tomcat 實例內的 Service 切換會重啟該實例（約 50~90 秒）。路徑型透過 Nginx 分流；IP 型需網卡綁定對應 IP。"
+      title="此 Tomcat 實例內的 Service 切換會重啟該實例，時間依系統數量而定、不會強制截斷。路徑型透過 Nginx 分流；IP 型共用網卡 IP、以 port 區分。"
     />
 
     <div class="service-filter">
@@ -93,6 +96,13 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="環境" width="100" align="center">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.online ? 'danger' : 'success'">
+            {{ row.online ? '上線' : '本機' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" fixed="right" align="center" width="150">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEditDialog(row)">
@@ -133,14 +143,16 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { nginxApi, tomcatsApi } from '@/api/tmam'
+import { tomcatsApi } from '@/api/tmam'
 import { useTomcatStore } from '@/stores/tomcat'
 import AddServiceDialog from '@/components/AddServiceDialog.vue'
+import NginxStatusBadge from '@/components/NginxStatusBadge.vue'
 
 const route = useRoute()
+const router = useRouter()
 const tomcatId = computed(() => route.params.tomcatId)
 
 const store = useTomcatStore()
@@ -156,11 +168,17 @@ const {
   enabledDirty,
 } = storeToRefs(store)
 
-const nginxStatus = ref(null)
+const nginxBadge = ref(null)
 const dialogVisible = ref(false)
 const dialogMode = ref('create')
 const editingRow = ref(null)
 const searchQuery = ref('')
+
+const tomcatLogsDir = computed(() => {
+  const home = currentInstance.value?.catalinaHome
+  if (!home) return ''
+  return home.replace(/[\\/]+$/, '') + '\\logs'
+})
 
 let pollingTimer = null
 
@@ -238,6 +256,32 @@ function openCreateDialog() {
   dialogVisible.value = true
 }
 
+async function goLogs() {
+  try {
+    await router.push(`/tomcats/${tomcatId.value}/logs`)
+  } catch (error) {
+    ElMessage.error(`無法開啟 Log 頁面：${error?.message || '未知錯誤'}`)
+  }
+}
+
+async function openLogsFolder() {
+  const dir = tomcatLogsDir.value
+  if (!dir) {
+    ElMessage.warning('找不到 Tomcat 日誌目錄')
+    return
+  }
+  try {
+    if (window.tmam?.openPath) {
+      const err = await window.tmam.openPath(dir)
+      if (err) throw new Error(err)
+      return
+    }
+    await tomcatsApi.openLogsDir(tomcatId.value)
+  } catch (error) {
+    ElMessage.error(store.extractErrorMessage(error) || '無法開啟日誌資料夾')
+  }
+}
+
 function openEditDialog(row) {
   dialogMode.value = 'edit'
   editingRow.value = { ...row }
@@ -246,12 +290,7 @@ function openEditDialog(row) {
 
 async function refresh() {
   const hadDirty = await store.refresh()
-  try {
-    const { data } = await nginxApi.status()
-    nginxStatus.value = data
-  } catch {
-    nginxStatus.value = null
-  }
+  await nginxBadge.value?.refresh()
   if (hadDirty) {
     ElMessage.info('已還原為目前實際啟用中的 Service')
   }
@@ -260,43 +299,52 @@ async function refresh() {
 async function withAction(fn) {
   actionLoading.value = true
   try {
-    return await fn()
+    const result = await fn()
+    await refresh()
+    return result
   } finally {
     actionLoading.value = false
-    await refresh()
   }
 }
 
 async function submitDialog(form) {
-  await withAction(async () => {
-    const id = tomcatId.value
-    if (dialogMode.value === 'create') {
-      await tomcatsApi.createService(id, {
-        type: form.type,
-        name: form.name,
-        displayName: form.displayName || form.name,
-        pathPrefix: form.pathPrefix,
-        docBase: form.docBase,
-        address: form.address,
-        port: form.port,
-        enabled: form.enabled,
-        proxyStripPrefix: form.proxyStripPrefix,
-      })
-      ElMessage.success('系統已新增，請點「套用勾選並啟動」生效')
-    } else {
-      await tomcatsApi.updateService(id, editingRow.value.name, {
-        displayName: form.displayName,
-        pathPrefix: form.pathPrefix,
-        docBase: form.docBase,
-        address: form.address,
-        port: form.port,
-        enabled: form.enabled,
-        proxyStripPrefix: form.proxyStripPrefix,
-      })
-      ElMessage.success('已更新，請點「套用勾選並啟動」生效')
-    }
-    dialogVisible.value = false
-  }).catch((e) => ElMessage.error(store.extractErrorMessage(e)))
+  try {
+    await withAction(async () => {
+      const id = tomcatId.value
+      if (dialogMode.value === 'create') {
+        await tomcatsApi.createService(id, {
+          type: form.type,
+          name: form.name,
+          displayName: form.displayName || form.name,
+          pathPrefix: form.pathPrefix,
+          docBase: form.docBase,
+          address: form.address,
+          port: form.port,
+          enabled: form.enabled,
+          proxyStripPrefix: form.proxyStripPrefix,
+          legacyPaths: form.legacyPaths,
+          indexPage: form.indexPage,
+          online: form.online,
+        })
+        ElMessage.success('系統已新增，請點「套用勾選並啟動」生效')
+      } else {
+        await tomcatsApi.updateService(id, editingRow.value.name, {
+          displayName: form.displayName,
+          pathPrefix: form.pathPrefix,
+          address: form.address,
+          port: form.port,
+          proxyStripPrefix: form.proxyStripPrefix,
+          legacyPaths: form.legacyPaths,
+          indexPage: form.indexPage,
+          online: form.online,
+        })
+        ElMessage.success('已更新，請點「套用勾選並啟動」生效')
+      }
+      dialogVisible.value = false
+    })
+  } catch (e) {
+    await ElMessageBox.alert(store.extractErrorMessage(e), '儲存失敗', { type: 'error' })
+  }
 }
 
 async function handleDelete(row) {
@@ -330,7 +378,7 @@ async function handleStop() {
 async function handleApply() {
   const changes = store.getEnabledChanges()
   await withAction(async () => {
-    ElMessage.info('正在套用設定並啟動，請稍候（約 50~90 秒）...')
+    ElMessage.info('正在套用設定並啟動，請稍候（不限時，請勿中斷）...')
     await store.saveEnabledSelection()
     const { data } = await tomcatsApi.apply(tomcatId.value)
     if (data?.success === false) throw new Error(data.message)
@@ -407,6 +455,12 @@ function serviceTagType(row) {
   font-size: 13px;
   color: #909399;
   word-break: break-all;
+}
+
+.instance-meta :deep(.el-button) {
+  padding: 0;
+  height: auto;
+  font-size: 13px;
 }
 
 .toolbar-actions {

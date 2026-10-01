@@ -13,7 +13,6 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.core.io.ClassPathResource;
 
 import com.tmam.model.TomcatInstanceConfig;
 import com.tmam.model.TomcatServiceConfig;
@@ -28,16 +27,12 @@ class ServerXmlServiceTest {
 
 	private ServerXmlService serverXmlService;
 	private PathGatewayService pathGatewayService;
-	private Path catalinaBase;
 
 	@BeforeEach
 	void setUp() {
 		Path instancesRoot = tempDir.resolve("instances");
-		catalinaBase = instancesRoot.resolve(INSTANCE_ID).resolve("catalina-base");
-		XmlConfiguratorService xmlConfiguratorService = new XmlConfiguratorService(
-				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
-				instancesRoot.toString(), xmlConfiguratorService);
+				instancesRoot.toString());
 		serverXmlService = new ServerXmlService(
 				new CatalinaHomeResolver(new TomcatDiscoveryService(), tempDir.toString()),
 				"PathGateway",
@@ -60,6 +55,8 @@ class ServerXmlServiceTest {
 		assertEquals("Portal_Area", imported.get(0).getName());
 		assertEquals("192.168.10.10", imported.get(0).getAddress());
 		assertEquals(36, imported.get(0).getPort());
+		assertTrue(imported.stream().allMatch(service -> "192.168.10.10".equals(service.getAddress())));
+		assertEquals(9, imported.stream().map(TomcatServiceConfig::getPort).distinct().count());
 
 		Map<String, TomcatServiceConfig> services = new LinkedHashMap<>();
 		imported.forEach(service -> {
@@ -69,10 +66,14 @@ class ServerXmlServiceTest {
 
 		serverXmlService.writeEffectiveServerXml(INSTANCE_ID, catalinaHome.toString(), services);
 
-		String effective = Files.readString(catalinaBase.resolve("conf/server.xml"));
+		String effective = Files.readString(catalinaHome.resolve("conf/server.xml"));
 		assertTrue(effective.contains("<Service name=\"Portal_Area\">"));
 		assertFalse(effective.contains("<Service name=\"Portal_Sport\">"));
+		assertTrue(effective.contains("<Server port=\"8005\" shutdown=\"SHUTDOWN\" startStopThreads=\"0\">"));
+		assertTrue(effective.contains("startStopThreads=\"0\""));
+		assertTrue(effective.contains("<JarScanner"));
 		assertTrue(Files.exists(serverXmlService.backupPath(INSTANCE_ID, catalinaHome.toString())));
+		assertTrue(Files.notExists(tempDir.resolve("instances").resolve(INSTANCE_ID).resolve("catalina-base")));
 	}
 
 	@Test
@@ -102,7 +103,7 @@ class ServerXmlServiceTest {
 		pathGatewayService.writeFragment(INSTANCE_ID, 8080, services.values());
 		serverXmlService.writeEffectiveServerXml(INSTANCE_ID, catalinaHome.toString(), services);
 
-		String effective = Files.readString(catalinaBase.resolve("conf/server.xml"));
+		String effective = Files.readString(catalinaHome.resolve("conf/server.xml"));
 		assertTrue(effective.contains("<Service name=\"Portal_Area\">"));
 		assertTrue(effective.contains("<Service name=\"PathGateway\">"));
 		assertTrue(effective.contains("path=\"/new-system\""));
@@ -146,8 +147,95 @@ class ServerXmlServiceTest {
 		serverXmlService.writeEffectiveServerXml(INSTANCE_ID, catalinaHome.toString(), services);
 		serverXmlService.restoreOriginal(INSTANCE_ID, catalinaHome.toString());
 
-		String restored = Files.readString(catalinaBase.resolve("conf/server.xml"));
+		String restored = Files.readString(catalinaHome.resolve("conf/server.xml"));
 		assertTrue(restored.contains("<Service name=\"Portal_CTSP\">"));
+	}
+
+	@Test
+	void patchLegacyIpFragmentPreservesExtraContextSettings() throws Exception {
+		Path fragments = tempDir.resolve("instances").resolve(INSTANCE_ID).resolve("server-fragments");
+		Files.createDirectories(fragments);
+		Files.writeString(fragments.resolve("Portal.xml"), """
+				<Service name="Portal">
+				  <Connector URIEncoding="utf-8" address="192.168.10.10" port="33" protocol="HTTP/1.1" />
+				  <Engine name="Portal" defaultHost="Portal">
+				    <Host name="Portal" unpackWARs="true" autoDeploy="true">
+				      <Context sessionCookieName="cloudSessionId" path="" docBase="D:\\Work_Java\\Portal\\web" reloadable="true" crossContext="true">
+				        <Resources cachingAllowed="false" cacheMaxSize="100000"/>
+				      </Context>
+				    </Host>
+				  </Engine>
+				</Service>
+				""");
+
+		TomcatServiceConfig service = new TomcatServiceConfig();
+		service.setName("Portal");
+		service.setAddress("192.168.10.10");
+		service.setPort(33);
+		service.setDocBase("D:\\Work_Java\\Portal\\web");
+		service.setOnline(true);
+		serverXmlService.patchLegacyIpFragment(INSTANCE_ID, "Portal", service);
+
+		String patched = Files.readString(fragments.resolve("Portal.xml"));
+		assertTrue(patched.contains("sessionCookieName=\"cloudSessionId\""));
+		assertTrue(patched.contains("docBase=\"D:\\Work_Java\\Portal\\web\""));
+		assertTrue(patched.contains("<Resources cachingAllowed=\"false\""));
+		assertTrue(patched.contains("name=\"tmam.online\""));
+		assertTrue(patched.contains("value=\"true\""));
+	}
+
+	@Test
+	void patchLegacyIpFragmentUpdatesConnectorWithoutTouchingRedirectPort() throws Exception {
+		Path fragments = tempDir.resolve("instances").resolve(INSTANCE_ID).resolve("server-fragments");
+		Files.createDirectories(fragments);
+		Files.writeString(fragments.resolve("Portal.xml"), """
+				<Service name="Portal">
+				  <Connector URIEncoding="utf-8" address="192.168.10.10" port="36" protocol="HTTP/1.1"
+				    redirectPort="443" />
+				  <Engine name="Portal" defaultHost="Portal">
+				    <Host name="Portal" unpackWARs="true" autoDeploy="true">
+				      <Context path="" docBase="D:\\Work_Java\\Portal\\web" reloadable="true">
+				      </Context>
+				    </Host>
+				  </Engine>
+				</Service>
+				""");
+
+		TomcatServiceConfig service = new TomcatServiceConfig();
+		service.setName("Portal");
+		service.setAddress("192.168.10.20");
+		service.setPort(8080);
+		service.setDocBase("D:\\Work_Java\\Portal\\web");
+		serverXmlService.patchLegacyIpFragment(INSTANCE_ID, "Portal", service);
+
+		String patched = Files.readString(fragments.resolve("Portal.xml"));
+		assertTrue(patched.contains("address=\"192.168.10.20\""));
+		assertTrue(patched.contains("port=\"8080\""));
+		assertTrue(patched.contains("redirectPort=\"443\""));
+		assertFalse(patched.contains("port=\"36\""));
+	}
+
+	@Test
+	void mergeImportedServicesKeepsImportedDocBaseWhenPreviousNull() {
+		TomcatServiceConfig imported = new TomcatServiceConfig();
+		imported.setName("Portal");
+		imported.setType(TomcatServiceType.LEGACY_IP);
+		imported.setDocBase("D:\\Work_Java\\Portal\\web");
+
+		TomcatServiceConfig previous = new TomcatServiceConfig();
+		previous.setName("Portal");
+		previous.setType(TomcatServiceType.LEGACY_IP);
+		previous.setDocBase(null);
+		previous.setEnabled(false);
+		previous.setDisplayName("公司個人系統開發平台(Portal)");
+
+		Map<String, TomcatServiceConfig> existing = new LinkedHashMap<>();
+		existing.put("Portal", previous);
+
+		Map<String, TomcatServiceConfig> merged = serverXmlService.mergeImportedServices(
+				List.of(imported), existing);
+		assertEquals("D:\\Work_Java\\Portal\\web", merged.get("Portal").getDocBase());
+		assertFalse(merged.get("Portal").isEnabled());
 	}
 
 }

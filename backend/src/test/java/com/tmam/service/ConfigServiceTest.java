@@ -12,7 +12,6 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.tmam.model.PortConfig;
@@ -30,10 +29,8 @@ class ConfigServiceTest {
 
 	@BeforeEach
 	void setUp() {
-		XmlConfiguratorService xmlConfiguratorService = new XmlConfiguratorService(
-				new ClassPathResource("server-template.xml"));
 		NativeTomcatEnvironmentService nativeTomcatEnvironmentService = new NativeTomcatEnvironmentService(
-				tempDir.resolve("instances").toString(), xmlConfiguratorService);
+				tempDir.resolve("instances").toString());
 		CatalinaHomeResolver catalinaHomeResolver = new CatalinaHomeResolver(
 				new TomcatDiscoveryService(), "C:/Program Files/apache-tomcat-9.0.115");
 		ServerXmlService serverXmlService = new ServerXmlService(

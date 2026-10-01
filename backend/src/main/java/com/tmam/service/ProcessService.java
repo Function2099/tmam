@@ -1,10 +1,8 @@
 package com.tmam.service;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -15,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -45,21 +44,24 @@ public class ProcessService {
 	private final ConfigService configService;
 	private final int startupTimeoutSec;
 	private final NativeTomcatEnvironmentService nativeTomcatEnvironmentService;
+	private final WindowsTomcatService windowsTomcatService;
 
 	private final Map<String, Process> activeProcesses = new ConcurrentHashMap<>();
 
 	public ProcessService(@Value("${tmam.instances-root}") String instancesRoot,
 			@Value("${tmam.pids-root}") String pidsRoot,
 			CatalinaHomeResolver catalinaHomeResolver,
-			@Value("${tmam.startup-timeout-sec:30}") int startupTimeoutSec,
+			@Value("${tmam.startup-timeout-sec:0}") int startupTimeoutSec,
 			ConfigService configService,
-			NativeTomcatEnvironmentService nativeTomcatEnvironmentService) {
+			NativeTomcatEnvironmentService nativeTomcatEnvironmentService,
+			WindowsTomcatService windowsTomcatService) {
 		this.instancesRoot = instancesRoot;
 		this.pidsRoot = pidsRoot;
 		this.catalinaHomeResolver = catalinaHomeResolver;
 		this.startupTimeoutSec = startupTimeoutSec;
 		this.configService = configService;
 		this.nativeTomcatEnvironmentService = nativeTomcatEnvironmentService;
+		this.windowsTomcatService = windowsTomcatService;
 	}
 
 	public StartResult start(ProjectConfig project) throws IOException, InterruptedException {
@@ -142,9 +144,29 @@ public class ProcessService {
 		}
 
 		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
-		nativeTomcatEnvironmentService.ensureInitialized(instanceId, catalinaHome.toString());
-		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
+		nativeTomcatEnvironmentService.ensureWritable(instanceId, catalinaHome.toString());
+		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(catalinaHome.toString());
 		log.info("[startTomcatInstance] catalinaHome={}, catalinaBase={}", catalinaHome, catalinaBase);
+
+		Optional<String> windowsService = windowsTomcatService.findServiceName(catalinaHome);
+		if (windowsService.isPresent()) {
+			log.info("[startTomcatInstance] 以 Windows 服務 {} 啟動（與「服務」開的是同一台）", windowsService.get());
+			long logOffset = currentLogSize(catalinaBase);
+			windowsTomcatService.start(windowsService.get());
+			StartResult result = monitorStartup(instanceId, catalinaBase, logOffset,
+					() -> !windowsTomcatService.isRunning(windowsService.get()));
+			if (result.success()) {
+				writeManagedMarker(instanceId);
+			}
+			else if (!isTimeout(result)) {
+				windowsTomcatService.stop(windowsService.get());
+			}
+			else {
+				writeManagedMarker(instanceId);
+				log.warn("[startTomcatInstance] {} 等待啟動標記逾時，行程仍在運行，不強制停止", instanceId);
+			}
+			return new StartResult(result.success(), instanceId, result.message());
+		}
 
 		StartResult result = startDetached(instanceId, catalinaHome, catalinaBase,
 				processBuilder -> applyInstanceJvmOpts(processBuilder, config, instance),
@@ -162,6 +184,16 @@ public class ProcessService {
 
 		activeProcesses.remove(instanceId);
 		TomcatInstanceConfig instance = config.requireInstance(instanceId);
+		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
+
+		Optional<String> windowsService = windowsTomcatService.findServiceName(catalinaHome);
+		if (windowsService.isPresent()) {
+			log.info("[stopTomcatInstance] 以 Windows 服務 {} 停止", windowsService.get());
+			windowsTomcatService.stop(windowsService.get());
+			waitForInstanceServicesClosed(config, instanceId, 30);
+			cleanup(instanceId);
+			return;
+		}
 
 		if (isAnyEnabledServiceListening(instance) || isPidAlive(instanceId)) {
 			stopInstanceViaCatalina(config, instanceId);
@@ -208,11 +240,21 @@ public class ProcessService {
 			return false;
 		}
 		TomcatInstanceConfig instance = config.getTomcatInstances().get(instanceId);
-		return instance != null && isAnyEnabledServiceListening(instance);
+		if (instance == null) {
+			return false;
+		}
+		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
+		if (windowsTomcatService.findServiceName(catalinaHome).isPresent()) {
+			return false;
+		}
+		return isAnyEnabledServiceListening(instance);
 	}
 
 	public List<String> getTomcatInstanceLogs(String instanceId, int lines) throws IOException {
-		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
+		TmamConfig config = configService.load();
+		TomcatInstanceConfig instance = config.requireInstance(instanceId);
+		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(
+				resolveInstanceCatalinaHome(instance));
 		return getLastLines(resolveLogFile(catalinaBase), lines);
 	}
 
@@ -258,7 +300,7 @@ public class ProcessService {
 	private void stopInstanceViaCatalina(TmamConfig config, String instanceId) throws IOException, InterruptedException {
 		TomcatInstanceConfig instance = config.requireInstance(instanceId);
 		Path catalinaHome = Path.of(resolveInstanceCatalinaHome(instance));
-		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(instanceId);
+		Path catalinaBase = nativeTomcatEnvironmentService.getCatalinaBase(catalinaHome.toString());
 		Path script = isWindows()
 				? catalinaHome.resolve("bin/catalina.bat")
 				: catalinaHome.resolve("bin/catalina.sh");
@@ -310,20 +352,9 @@ public class ProcessService {
 	}
 
 	public boolean isPathProxyHealthy(String upstreamHost, int gatewayPort, String pathPrefix) {
-		String normalized = PathProxyValidator.normalizePathPrefix(pathPrefix);
-		try {
-			URL url = new URL("http://" + upstreamHost + ":" + gatewayPort + normalized + "/");
-			HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-			connection.setConnectTimeout(1000);
-			connection.setReadTimeout(1000);
-			connection.setRequestMethod("GET");
-			connection.setInstanceFollowRedirects(false);
-			int status = connection.getResponseCode();
-			return status >= 200 && status < 400;
-		}
-		catch (IOException e) {
-			return false;
-		}
+		// 只探 TCP，不要 GET 應用首頁：portal 的 Fail-to-Ban 會把 127.0.0.1 封鎖，
+		// 接著 sendRedirect("http://"+ip) 讓瀏覽器落到 Nginx 歡迎頁。
+		return isServicePortListening(upstreamHost, gatewayPort);
 	}
 
 	private boolean isHttpPortListening(String projectName) throws IOException {
@@ -365,18 +396,23 @@ public class ProcessService {
 		processBuilder.redirectErrorStream(true);
 		processBuilder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
 
+		long logOffset = currentLogSize(catalinaBase);
 		Process launcher = processBuilder.start();
 		launcher.waitFor(10, TimeUnit.SECONDS);
 
-		StartResult result = monitorStartup(name, catalinaBase);
+		StartResult result = monitorStartup(name, catalinaBase, logOffset, () -> isPidFileDead(name));
 		if (result.success()) {
 			writeManagedMarker(name);
 			if (!isWindows() && Files.exists(pidFile)) {
 				log.info("[startDetached] {} JVM pid={}", name, Files.readString(pidFile).trim());
 			}
 		}
-		else {
+		else if (!isTimeout(result)) {
 			onFailureStop.run();
+		}
+		else {
+			writeManagedMarker(name);
+			log.warn("[startDetached] {} 等待啟動標記逾時，行程仍在運行，不強制停止", name);
 		}
 		return result;
 	}
@@ -428,28 +464,103 @@ public class ProcessService {
 		Files.writeString(managedMarkerPath(name), String.valueOf(System.currentTimeMillis()));
 	}
 
-	private StartResult monitorStartup(String name, Path catalinaBase)
+	private StartResult monitorStartup(String name, Path catalinaBase, long logOffsetBeforeStart)
 			throws InterruptedException, IOException {
-		long deadline = System.currentTimeMillis() + startupTimeoutSec * 1000L;
-		Path logFile = resolveLogFile(catalinaBase);
-		log.debug("[monitorStartup] 監控 {} 啟動, logFile={}", name, logFile);
+		return monitorStartup(name, catalinaBase, logOffsetBeforeStart, () -> false);
+	}
 
-		while (System.currentTimeMillis() < deadline) {
-			if (Files.exists(logFile)) {
-				for (String line : LogFileReader.readLastLines(logFile, 200)) {
-					if (line.contains(SUCCESS_MARKER)) {
-						log.info("[monitorStartup] {} 從日誌檔偵測到啟動成功", name);
-						return StartResult.success(name);
-					}
+	private StartResult monitorStartup(String name, Path catalinaBase, long logOffsetBeforeStart,
+			BooleanSupplier aborted) throws InterruptedException, IOException {
+		boolean unlimited = startupTimeoutSec <= 0;
+		long startedAt = System.currentTimeMillis();
+		long deadline = unlimited ? Long.MAX_VALUE : startedAt + startupTimeoutSec * 1000L;
+		Path logFile = resolveLogFile(catalinaBase);
+		log.info("[monitorStartup] 監控 {} 啟動, timeout={}, logFile={}, offset={}",
+				name, unlimited ? "unlimited" : startupTimeoutSec + "s", logFile, logOffsetBeforeStart);
+
+		long lastProgressLog = startedAt;
+		while (unlimited || System.currentTimeMillis() < deadline) {
+			if (hasNewStartupMarker(logFile, logOffsetBeforeStart)) {
+				log.info("[monitorStartup] {} 從日誌檔偵測到啟動成功（{}秒）",
+						name, (System.currentTimeMillis() - startedAt) / 1000);
+				return StartResult.success(name);
+			}
+			if (aborted != null && aborted.getAsBoolean()) {
+				List<String> lastLogs = getLastLines(logFile, 20);
+				String crashHint = recentJvmCrashHint(catalinaBase);
+				log.error("[monitorStartup] {} 啟動過程中行程已結束, logFile={}, 最後 {} 行日誌{}",
+						name, logFile, lastLogs.size(), crashHint == null ? "" : "，" + crashHint);
+				String message = "啟動過程中行程已結束。";
+				if (crashHint != null) {
+					message += crashHint;
 				}
+				message += "\n最後日誌：\n" + String.join("\n", lastLogs);
+				return StartResult.failure(name, message);
+			}
+			long now = System.currentTimeMillis();
+			if (now - lastProgressLog >= 15_000L) {
+				log.info("[monitorStartup] {} 仍在啟動中（已等待 {} 秒）", name, (now - startedAt) / 1000);
+				lastProgressLog = now;
 			}
 			Thread.sleep(300);
 		}
 
 		List<String> lastLogs = getLastLines(logFile, 20);
-		log.error("[monitorStartup] {} 啟動逾時（{}秒）, logFile={}, 最後 {} 行日誌",
+		log.warn("[monitorStartup] {} 啟動等待逾時（{}秒）但不會強制停止, logFile={}, 最後 {} 行日誌",
 				name, startupTimeoutSec, logFile, lastLogs.size());
 		return StartResult.timeout(name, lastLogs);
+	}
+
+	private static boolean isTimeout(StartResult result) {
+		return result != null && !result.success() && result.message() != null
+				&& result.message().startsWith("啟動超時");
+	}
+
+	private boolean isPidFileDead(String name) {
+		try {
+			long pid = readPid(name);
+			return ProcessHandle.of(pid).map(handle -> !handle.isAlive()).orElse(true);
+		}
+		catch (IOException noPidYet) {
+			return false;
+		}
+	}
+
+	static boolean hasNewStartupMarker(Path logFile, long offsetBeforeStart) throws IOException {
+		if (!Files.exists(logFile)) {
+			return false;
+		}
+		long size = Files.size(logFile);
+		long offset = size < offsetBeforeStart ? 0 : offsetBeforeStart;
+		if (size <= offset) {
+			return false;
+		}
+		long length = size - offset;
+		int toRead = (int) Math.min(length, 2 * 1024 * 1024);
+		long startPos = size - toRead;
+		byte[] chunk = new byte[toRead];
+		try (java.nio.channels.SeekableByteChannel channel = Files.newByteChannel(logFile,
+				java.nio.file.StandardOpenOption.READ)) {
+			channel.position(startPos);
+			java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(chunk);
+			while (buffer.hasRemaining()) {
+				if (channel.read(buffer) < 0) {
+					break;
+				}
+			}
+			String text = new String(chunk, 0, buffer.position(), java.nio.charset.StandardCharsets.UTF_8);
+			return text.contains(SUCCESS_MARKER);
+		}
+	}
+
+	private long currentLogSize(Path catalinaBase) {
+		try {
+			Path logFile = resolveLogFile(catalinaBase);
+			return Files.exists(logFile) ? Files.size(logFile) : 0L;
+		}
+		catch (IOException e) {
+			return 0L;
+		}
 	}
 
 	private void stopViaCatalina(String projectName) throws IOException, InterruptedException {
@@ -533,6 +644,60 @@ public class ProcessService {
 						}
 					}))
 					.orElse(catalinaOut);
+		}
+	}
+
+	static String jvmCrashHint(String hsErrText) {
+		if (hsErrText == null || hsErrText.isBlank()) {
+			return null;
+		}
+		if (hsErrText.contains("insufficient memory") || hsErrText.contains("Out of Memory Error")) {
+			return "原因是 Java 原生記憶體不足，Tomcat 行程已崩潰。請先關閉其他佔用記憶體的程式，或調低 Tomcat 服務的 -Xmx 後再啟動。";
+		}
+		if (hsErrText.contains("A fatal error has been detected")) {
+			return "原因是 Java 行程異常終止。請查看 Tomcat 目錄下的 hs_err_pid 記錄。";
+		}
+		return null;
+	}
+
+	private String recentJvmCrashHint(Path catalinaBase) {
+		if (catalinaBase == null || !Files.isDirectory(catalinaBase)) {
+			return null;
+		}
+		long cutoff = System.currentTimeMillis() - 60_000L;
+		try (Stream<Path> files = Files.list(catalinaBase)) {
+			Optional<Path> newest = files
+					.filter(path -> {
+						String fileName = path.getFileName().toString();
+						return fileName.startsWith("hs_err_pid") && fileName.endsWith(".log");
+					})
+					.filter(path -> {
+						try {
+							return Files.getLastModifiedTime(path).toMillis() >= cutoff;
+						}
+						catch (IOException e) {
+							return false;
+						}
+					})
+					.max(Comparator.comparingLong(path -> {
+						try {
+							return Files.getLastModifiedTime(path).toMillis();
+						}
+						catch (IOException e) {
+							return 0L;
+						}
+					}));
+			if (newest.isEmpty()) {
+				return null;
+			}
+			String text = Files.readString(newest.get());
+			if (text.length() > 4000) {
+				text = text.substring(0, 4000);
+			}
+			return jvmCrashHint(text);
+		}
+		catch (IOException e) {
+			return null;
 		}
 	}
 

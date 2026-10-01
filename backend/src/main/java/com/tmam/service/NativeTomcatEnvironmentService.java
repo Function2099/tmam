@@ -1,9 +1,9 @@
 package com.tmam.service;
 
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -19,24 +19,27 @@ public class NativeTomcatEnvironmentService {
 
 	private static final Logger log = LoggerFactory.getLogger(NativeTomcatEnvironmentService.class);
 
-	private static final List<String> BASE_DIRS = List.of("conf", "logs", "temp", "work", "webapps");
+	static final String ADMIN_REQUIRED_HINT = "請以系統管理員執行 TMAM。";
 
 	private final String instancesRoot;
-	private final XmlConfiguratorService xmlConfiguratorService;
 	private final Set<String> initializedKeys = ConcurrentHashMap.newKeySet();
 
-	public NativeTomcatEnvironmentService(@Value("${tmam.instances-root}") String instancesRoot,
-			XmlConfiguratorService xmlConfiguratorService) {
+	public NativeTomcatEnvironmentService(@Value("${tmam.instances-root}") String instancesRoot) {
 		this.instancesRoot = instancesRoot;
-		this.xmlConfiguratorService = xmlConfiguratorService;
 	}
 
 	public Path getInstanceRoot(String instanceId) {
 		return Path.of(instancesRoot, instanceId);
 	}
 
-	public Path getCatalinaBase(String instanceId) {
-		return getInstanceRoot(instanceId).resolve("catalina-base");
+	/**
+	 * 執行時 CATALINA_BASE 與安裝目錄相同（in-place），log 與 server.xml 都寫在這裡。
+	 */
+	public Path getCatalinaBase(String catalinaHome) {
+		if (catalinaHome == null || catalinaHome.isBlank()) {
+			throw new IllegalArgumentException("Tomcat 安裝路徑不可為空");
+		}
+		return Path.of(catalinaHome.trim()).toAbsolutePath().normalize();
 	}
 
 	public Path getFragmentsDir(String instanceId) {
@@ -48,30 +51,66 @@ public class NativeTomcatEnvironmentService {
 	}
 
 	public void ensureInitialized(String instanceId, String catalinaHome) throws IOException {
-		Path home = Path.of(catalinaHome);
-		Path base = getCatalinaBase(instanceId);
+		Path home = getCatalinaBase(catalinaHome);
+		Path conf = home.resolve("conf");
 		String cacheKey = cacheKey(instanceId, catalinaHome);
-		if (initializedKeys.contains(cacheKey) && Files.isDirectory(base.resolve("conf"))) {
+		if (initializedKeys.contains(cacheKey) && Files.isDirectory(conf)) {
 			return;
 		}
 
-		log.info("[ensureInitialized] instance={}, CATALINA_BASE={} (HOME={})", instanceId, base, home);
-		try {
-			for (String dir : BASE_DIRS) {
-				Files.createDirectories(base.resolve(dir));
-			}
-			xmlConfiguratorService.copyFromHome(home, base);
-			initializedKeys.add(cacheKey);
-			log.info("[ensureInitialized] 就緒，server.xml 將寫入 {}", base.resolve("conf/server.xml"));
+		log.info("[ensureInitialized] instance={}, CATALINA_HOME={} (in-place BASE)", instanceId, home);
+		if (!Files.isDirectory(conf)) {
+			throw new IOException("找不到 Tomcat conf 目錄: " + conf);
 		}
-		catch (IOException ex) {
-			initializedKeys.remove(cacheKey);
-			throw ex;
+		initializedKeys.add(cacheKey);
+		log.info("[ensureInitialized] 就緒，執行目錄 {}", home);
+	}
+
+	public void ensureWritable(String instanceId, String catalinaHome) throws IOException {
+		ensureInitialized(instanceId, catalinaHome);
+		Path home = getCatalinaBase(catalinaHome);
+		Path conf = home.resolve("conf");
+		Path serverXml = conf.resolve("server.xml");
+		if (!isConfWritable(conf, serverXml)) {
+			throw unwritable(Files.exists(serverXml) ? serverXml : conf);
 		}
+	}
+
+	public AccessDeniedException unwritable(Path path) {
+		return new AccessDeniedException(path.toString(), null,
+				"無法寫入 " + path + "。" + ADMIN_REQUIRED_HINT);
+	}
+
+	public IOException wrapWriteFailure(Path path, IOException cause) {
+		if (isPermissionFailure(cause)) {
+			AccessDeniedException wrapped = unwritable(path);
+			wrapped.initCause(cause);
+			return wrapped;
+		}
+		return cause;
 	}
 
 	public void invalidate(String instanceId) {
 		initializedKeys.removeIf(key -> key.startsWith(instanceId + "|"));
+	}
+
+	private static boolean isConfWritable(Path conf, Path serverXml) {
+		if (!Files.isWritable(conf)) {
+			return false;
+		}
+		return !Files.exists(serverXml) || Files.isWritable(serverXml);
+	}
+
+	private static boolean isPermissionFailure(IOException ex) {
+		if (ex instanceof AccessDeniedException) {
+			return true;
+		}
+		String message = ex.getMessage();
+		if (message == null) {
+			return false;
+		}
+		String lower = message.toLowerCase();
+		return lower.contains("access") || lower.contains("denied") || lower.contains("permission");
 	}
 
 	private static String cacheKey(String instanceId, String catalinaHome) {

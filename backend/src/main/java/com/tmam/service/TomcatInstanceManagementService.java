@@ -1,10 +1,12 @@
 package com.tmam.service;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -72,7 +74,31 @@ public class TomcatInstanceManagementService {
 		config = configService.load();
 		TomcatInstanceConfig instance = config.requireInstance(instanceId);
 		nativeTomcatEnvironmentService.ensureInitialized(instanceId, instance.getCatalinaHome());
+		if (backfillLegacyDocBases(instanceId, instance)) {
+			configService.save(config);
+		}
 		return config;
+	}
+
+	/** 匯入的 IP 型 Service 若設定檔遺失 docBase，從 fragment 回填，避免後續誤寫空路徑。 */
+	private boolean backfillLegacyDocBases(String instanceId, TomcatInstanceConfig instance) throws IOException {
+		boolean changed = false;
+		for (TomcatServiceConfig service : instance.getServices().values()) {
+			if (!service.isLegacyIp()) {
+				continue;
+			}
+			if (service.getDocBase() != null && !service.getDocBase().isBlank()) {
+				continue;
+			}
+			String fromFragment = serverXmlService.readDocBaseFromFragment(instanceId, service.getName());
+			if (fromFragment != null) {
+				service.setDocBase(fromFragment);
+				changed = true;
+				log.info("[backfillLegacyDocBases] instance={} service={} docBase={}", instanceId, service.getName(),
+						fromFragment);
+			}
+		}
+		return changed;
 	}
 
 	public List<TomcatDiscoveryView> discover() throws Exception {
@@ -192,16 +218,42 @@ public class TomcatInstanceManagementService {
 		return new TomcatStatusView(status, processService.isExternallyManaged(config, instanceId, status));
 	}
 
+	/**
+	 * 有啟用的路徑型服務時，寫入設定並啟動／重載 Nginx。失敗只記 log，不影響 Tomcat。
+	 */
+	public void ensureNginxRunning() {
+		try {
+			TmamConfig config = ensureReady();
+			applyNginxIfAvailable(config);
+		}
+		catch (Exception ex) {
+			log.warn("[ensureNginx] 無法自動啟動 Nginx（路徑型公開網址可能無法連線）: {}", ex.getMessage());
+		}
+	}
+
 	public NginxStatusView nginxStatus() throws Exception {
 		ensureReady();
+		boolean available = nginxConfigService.isAvailable();
+		boolean running = available && nginxConfigService.isListening();
+		String message;
+		if (!available) {
+			message = "Nginx 執行檔不存在或未啟用";
+		}
+		else if (running) {
+			message = "Nginx 運行中（埠 " + nginxConfigService.getListenPort() + "）";
+		}
+		else {
+			message = "Nginx 已安裝但未啟動，路徑型系統（如 /mgr）會無法連線";
+		}
 		return new NginxStatusView(
 				nginxConfigService.isEnabled(),
-				nginxConfigService.isAvailable(),
+				available,
+				running,
 				nginxConfigService.getExecutable(),
 				nginxConfigService.getConfigPath().toString(),
 				nginxConfigService.getLocationsFragment().toString(),
 				nginxConfigService.getListenPort(),
-				nginxConfigService.isAvailable() ? "Nginx 可用" : "Nginx 執行檔不存在或未啟用");
+				message);
 	}
 
 	public TomcatServiceView addService(String instanceId, TomcatServiceCreateRequest request) throws Exception {
@@ -217,6 +269,7 @@ public class TomcatInstanceManagementService {
 
 	public TomcatServiceView updateService(String instanceId, String name, TomcatServiceUpdateRequest request)
 			throws Exception {
+		log.info("[updateService] instance={} service={}", instanceId, name);
 		TmamConfig config = ensureInstanceReady(instanceId);
 		TomcatInstanceConfig instance = config.requireInstance(instanceId);
 		TomcatServiceConfig service = instance.getServices().get(name);
@@ -237,24 +290,46 @@ public class TomcatInstanceManagementService {
 			if (request.proxyStripPrefix() != null) {
 				service.setProxyStripPrefix(request.proxyStripPrefix());
 			}
+			if (request.legacyPaths() != null) {
+				List<String> legacyPaths = PathProxyValidator.normalizeLegacyPaths(request.legacyPaths());
+				PathProxyValidator.validateLegacyPathsAcrossInstances(legacyPaths, config, name);
+				service.setLegacyPaths(new ArrayList<>(legacyPaths));
+			}
+			if (request.indexPage() != null) {
+				service.setIndexPage(PathProxyValidator.normalizeIndexPage(request.indexPage()));
+			}
+			if (request.online() != null) {
+				service.setOnline(request.online());
+			}
 		}
 		else {
 			boolean addressChanged = false;
-			if (request.address() != null && !request.address().isBlank()) {
-				service.setAddress(request.address().trim());
-				addressChanged = true;
-			}
-			if (request.port() != null) {
-				service.setPort(request.port());
-				addressChanged = true;
+			boolean docBaseChanged = false;
+			boolean onlineChanged = false;
+			if ((request.address() != null && !request.address().isBlank()) || request.port() != null) {
+				String nextAddress = request.address() != null && !request.address().isBlank()
+						? request.address().trim()
+						: service.getAddress();
+				int nextPort = request.port() != null ? request.port() : service.getPort();
+				PathProxyValidator.validateLegacyIp(nextAddress, nextPort);
+				boolean sameAddress = nextAddress.equals(service.getAddress());
+				if (!sameAddress || nextPort != service.getPort()) {
+					service.setAddress(nextAddress);
+					service.setPort(nextPort);
+					addressChanged = true;
+				}
 			}
 			if (request.docBase() != null && !request.docBase().isBlank()) {
 				PathProxyValidator.validateDocBase(request.docBase());
 				service.setDocBase(request.docBase().trim());
+				docBaseChanged = true;
 			}
-			if (addressChanged || request.docBase() != null) {
-				serverXmlService.writeServiceFragment(instanceId, name,
-						LegacyIpFragmentBuilder.build(service));
+			if (request.online() != null) {
+				onlineChanged = service.isOnline() != request.online();
+				service.setOnline(request.online());
+			}
+			if (addressChanged || docBaseChanged || onlineChanged) {
+				rewriteLegacyIpFragment(instanceId, name, service);
 			}
 		}
 		if (request.enabled() != null) {
@@ -292,10 +367,6 @@ public class TomcatInstanceManagementService {
 			if (service == null) {
 				throw new IllegalArgumentException("未知 Service: " + name);
 			}
-			if (service.isLegacyIp() && !enabled && countEnabledLegacy(instance) <= 1
-					&& hasLegacyIpServices(instance)) {
-				throw new IllegalArgumentException("至少需要保留一個啟用的 IP 型 Service");
-			}
 			boolean wasEnabled = service.isEnabled();
 			if (wasEnabled != enabled) {
 				String label = serviceLabel(service);
@@ -308,7 +379,9 @@ public class TomcatInstanceManagementService {
 			}
 			service.setEnabled(enabled);
 		});
+		// 以整包勾選的最終結果判斷，避免「只留一個、其餘已是停用」在逐筆套用時被誤判成沒有啟用任何 Service
 		ensureAtLeastOneEnabled(instance);
+		ensureAtLeastOneEnabledLegacy(instance);
 		logEnabledSelectionChanges(instanceId, enabledNow, disabledNow);
 		refreshPathProxyArtifacts(config, instanceId);
 		configService.save(config);
@@ -365,7 +438,8 @@ public class TomcatInstanceManagementService {
 	private StartResult doStart(String instanceId) throws Exception {
 		TmamConfig config = ensureInstanceReady(instanceId);
 		if (processService.tomcatInstanceStatus(config, instanceId) == InstanceStatus.RUNNING) {
-			return StartResult.failure(instanceId, "Tomcat 已在運行中");
+			ensureNginxRunning();
+			return new StartResult(true, instanceId, "Tomcat 已在運行中");
 		}
 		applyArtifacts(config, instanceId);
 		return processService.startTomcatInstance(config, instanceId);
@@ -477,10 +551,35 @@ public class TomcatInstanceManagementService {
 		return processService.getTomcatInstanceLogs(instanceId, lines);
 	}
 
+	public Path resolveLogsDirectory(String instanceId) throws Exception {
+		TmamConfig config = ensureInstanceReady(instanceId);
+		TomcatInstanceConfig instance = config.requireInstance(instanceId);
+		return nativeTomcatEnvironmentService.getCatalinaBase(instance.getCatalinaHome()).resolve("logs");
+	}
+
+	public void openLogsDirectory(String instanceId) throws Exception {
+		Path dir = resolveLogsDirectory(instanceId);
+		if (!Files.isDirectory(dir)) {
+			throw new IllegalArgumentException("找不到日誌目錄: " + dir);
+		}
+		openDirectory(dir);
+	}
+
+	private void openDirectory(Path dir) throws IOException {
+		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		String absolute = dir.toAbsolutePath().normalize().toString();
+		ProcessBuilder builder = os.contains("win")
+				? new ProcessBuilder("explorer.exe", absolute)
+				: new ProcessBuilder("xdg-open", absolute);
+		builder.start();
+		log.info("已開啟日誌資料夾 {}", absolute);
+	}
+
 	private TomcatServiceView addPathProxyService(String instanceId, TmamConfig config,
 			TomcatInstanceConfig instance, TomcatServiceCreateRequest request) throws Exception {
 		validatePathProxyCreate(request, config, instanceId);
 		String normalizedPrefix = PathProxyValidator.normalizePathPrefix(request.pathPrefix());
+		List<String> legacyPaths = PathProxyValidator.normalizeLegacyPaths(request.legacyPaths());
 		TomcatServiceConfig service = new TomcatServiceConfig();
 		service.setName(request.name().trim());
 		service.setDisplayName(request.displayName() != null && !request.displayName().isBlank()
@@ -491,6 +590,9 @@ public class TomcatInstanceManagementService {
 		service.setDocBase(request.docBase().trim());
 		service.setEnabled(request.enabled() == null || request.enabled());
 		service.setProxyStripPrefix(Boolean.TRUE.equals(request.proxyStripPrefix()));
+		service.setLegacyPaths(new ArrayList<>(legacyPaths));
+		service.setIndexPage(PathProxyValidator.normalizeIndexPage(request.indexPage()));
+		service.setOnline(Boolean.TRUE.equals(request.online()));
 		service.setUserCreated(true);
 		service.setAddress("127.0.0.1");
 		service.setPort(nginxConfigService.getListenPort());
@@ -514,6 +616,7 @@ public class TomcatInstanceManagementService {
 		service.setPort(request.port());
 		service.setDocBase(request.docBase().trim());
 		service.setEnabled(request.enabled() == null || request.enabled());
+		service.setOnline(Boolean.TRUE.equals(request.online()));
 		service.setUserCreated(true);
 
 		String fragment = LegacyIpFragmentBuilder.build(service);
@@ -523,6 +626,25 @@ public class TomcatInstanceManagementService {
 		return toView(instanceId, instance, service, processService.tomcatInstanceStatus(config, instanceId));
 	}
 
+	private void rewriteLegacyIpFragment(String instanceId, String name, TomcatServiceConfig service)
+			throws IOException {
+		// 匯入的原始片段含 Valve / sessionCookieName 等，不可整段用簡化模板覆寫
+		if (!service.isUserCreated()) {
+			if (service.getDocBase() == null || service.getDocBase().isBlank()) {
+				String fromFragment = serverXmlService.readDocBaseFromFragment(instanceId, name);
+				if (fromFragment != null) {
+					service.setDocBase(fromFragment);
+				}
+			}
+			serverXmlService.patchLegacyIpFragment(instanceId, name, service);
+			return;
+		}
+		if (service.getDocBase() == null || service.getDocBase().isBlank()) {
+			throw new IllegalArgumentException("webapp 目錄不可為空");
+		}
+		serverXmlService.writeServiceFragment(instanceId, name, LegacyIpFragmentBuilder.build(service));
+	}
+
 	private void validatePathProxyCreate(TomcatServiceCreateRequest request, TmamConfig config, String instanceId) {
 		if (request.name() == null || request.name().isBlank()) {
 			throw new IllegalArgumentException("系統名稱不可為空");
@@ -530,6 +652,8 @@ public class TomcatInstanceManagementService {
 		PathProxyValidator.validateNotReservedName(request.name().trim(), pathGatewayService.getServiceName());
 		PathProxyValidator.validateNameAcrossInstances(request.name().trim(), config, instanceId, null);
 		PathProxyValidator.validatePathPrefixAcrossInstances(request.pathPrefix(), config, instanceId, null);
+		PathProxyValidator.validateLegacyPathsAcrossInstances(
+				PathProxyValidator.normalizeLegacyPaths(request.legacyPaths()), config, null);
 		PathProxyValidator.validateDocBase(request.docBase());
 	}
 
@@ -559,14 +683,16 @@ public class TomcatInstanceManagementService {
 		if (!nginxConfigService.isEnabled() || !nginxConfigService.isAvailable()) {
 			return;
 		}
-		boolean hasEnabledPathProxy = config.getTomcatInstances().values().stream()
-				.flatMap(i -> i.getServices().values().stream())
-				.anyMatch(service -> service.isPathProxy() && service.isEnabled());
-		if (!hasEnabledPathProxy) {
+		if (!hasEnabledPathProxy(config)) {
 			return;
 		}
-		nginxConfigService.testConfig();
-		nginxConfigService.reloadOrStart();
+		nginxConfigService.apply(config);
+	}
+
+	private static boolean hasEnabledPathProxy(TmamConfig config) {
+		return config.getTomcatInstances().values().stream()
+				.flatMap(i -> i.getServices().values().stream())
+				.anyMatch(service -> service.isPathProxy() && service.isEnabled());
 	}
 
 	private void applyServerXml(TmamConfig config, String instanceId) throws IOException {
@@ -597,6 +723,12 @@ public class TomcatInstanceManagementService {
 	private void ensureAtLeastOneEnabled(TomcatInstanceConfig instance) {
 		if (instance.getServices().values().stream().noneMatch(TomcatServiceConfig::isEnabled)) {
 			throw new IllegalArgumentException("至少需要啟用一個 Service");
+		}
+	}
+
+	private void ensureAtLeastOneEnabledLegacy(TomcatInstanceConfig instance) {
+		if (hasLegacyIpServices(instance) && countEnabledLegacy(instance) < 1) {
+			throw new IllegalArgumentException("至少需要保留一個啟用的 IP 型 Service");
 		}
 	}
 
@@ -648,10 +780,13 @@ public class TomcatInstanceManagementService {
 					: InstanceStatus.STOPPED;
 		}
 
-		String publicUrl = service.isPathProxy()
-				? "http://localhost:" + nginxConfigService.getListenPort()
-						+ PathProxyValidator.normalizePathPrefix(service.getPathPrefix()) + "/"
-				: null;
+		String publicUrl = null;
+		if (service.isPathProxy()) {
+			String prefix = PathProxyValidator.normalizePathPrefix(service.getPathPrefix());
+			String indexPage = PathProxyValidator.normalizeIndexPage(service.getIndexPage());
+			publicUrl = "http://localhost:" + nginxConfigService.getListenPort() + prefix
+					+ (indexPage.isBlank() ? "/" : "/" + indexPage);
+		}
 
 		return new TomcatServiceView(
 				service.getName(),
@@ -665,7 +800,10 @@ public class TomcatInstanceManagementService {
 				service.getDocBase(),
 				publicUrl,
 				service.isProxyStripPrefix(),
-				service.isUserCreated());
+				service.isOnline(),
+				service.isUserCreated(),
+				service.getLegacyPaths(),
+				service.getIndexPage());
 	}
 
 }

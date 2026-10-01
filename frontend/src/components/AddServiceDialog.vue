@@ -27,6 +27,22 @@
         <el-form-item label="剝除前綴轉發">
           <el-switch v-model="form.proxyStripPrefix" />
         </el-form-item>
+        <el-form-item label="子路徑">
+          <el-input
+            v-model="form.legacyPathsText"
+            type="textarea"
+            :rows="4"
+            placeholder="/images&#10;/Modules&#10;/Template&#10;/Portal.jsp&#10;/index_Login.jsp"
+          />
+          <div class="form-hint">
+            應用若把資源寫在根路徑（/Modules、/images、/Portal.jsp），這裡逐行填寫。
+            進入該系統時會記住目前前綴；之後這些根路徑會導回同一個系統，不會被別的系統搶走。
+          </div>
+        </el-form-item>
+        <el-form-item label="首頁">
+          <el-input v-model="form.indexPage" placeholder="index_Login.jsp" />
+          <div class="form-hint">造訪前綴根路徑（例如 /clbu_leeten/）時導向此檔。沒需要請留空。</div>
+        </el-form-item>
       </template>
 
       <template v-else>
@@ -37,6 +53,11 @@
           <el-input-number v-model="form.port" :min="1" :max="65535" />
         </el-form-item>
       </template>
+
+      <el-form-item label="是否上線">
+        <el-switch v-model="form.online" active-text="上線" inactive-text="本機測試" />
+        <div class="form-hint">關閉時寫入 tmam.online=false，應用不應強制轉 HTTPS（適合本機測試）</div>
+      </el-form-item>
 
       <template v-if="mode === 'create'">
         <el-form-item label="webapp 目錄" prop="docBase">
@@ -59,7 +80,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 const visible = defineModel({ type: Boolean, default: false })
@@ -83,6 +104,9 @@ const form = reactive({
   port: 8080,
   enabled: true,
   proxyStripPrefix: false,
+  legacyPathsText: '',
+  indexPage: '',
+  online: false,
 })
 
 const rules = computed(() => ({
@@ -122,6 +146,9 @@ watch(
     form.port = row.port ?? 8080
     form.enabled = row.enabled ?? true
     form.proxyStripPrefix = !!row.proxyStripPrefix
+    form.legacyPathsText = (row.legacyPaths ?? []).join('\n')
+    form.indexPage = row.indexPage ?? ''
+    form.online = !!row.online
   },
   { immediate: true },
 )
@@ -136,6 +163,9 @@ function reset() {
   form.port = 8080
   form.enabled = true
   form.proxyStripPrefix = false
+  form.legacyPathsText = ''
+  form.indexPage = ''
+  form.online = false
 }
 
 async function browseDocBase() {
@@ -154,9 +184,34 @@ async function browseDocBase() {
   }
 }
 
+function readDisplayedPort() {
+  const input = formRef.value?.$el?.querySelector('.el-input-number input')
+  if (!input) return
+  const parsed = Number(String(input.value ?? '').trim())
+  if (Number.isFinite(parsed)) {
+    form.port = parsed
+  }
+}
+
 async function submit() {
+  // 數字框有時畫面已改、模型仍是舊值；儲存前以畫面上的數字為準
+  readDisplayedPort()
+  await nextTick()
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
-  emit('submit', { ...form })
+  const legacyPaths = form.legacyPathsText
+    .split(/[\n,]/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  emit('submit', { ...form, legacyPaths, indexPage: form.indexPage })
 }
 </script>
+
+<style scoped>
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
+}
+</style>

@@ -83,7 +83,7 @@
   </Service>
   
    <Service name="Loc">
-    <Connector URIEncoding="utf-8" address="192.168.10.11" port="34" protocol="HTTP/1.1" 
+    <Connector URIEncoding="utf-8" address="192.168.10.10" port="34" protocol="HTTP/1.1" 
       acceptCount="500"
       useBodyEncodingForURI="true"
       connectionUploadTimeout="36000000" 
@@ -113,7 +113,7 @@
   </Service>
   
    <Service name="Portal_Sport">
-    <Connector URIEncoding="utf-8" address="192.168.10.12" port="35" protocol="HTTP/1.1" 
+    <Connector URIEncoding="utf-8" address="192.168.10.10" port="35" protocol="HTTP/1.1" 
       acceptCount="500"
       useBodyEncodingForURI="true"
       connectionUploadTimeout="36000000" 
@@ -143,7 +143,7 @@
   </Service>
   
    <Service name="Portal">
-    <Connector URIEncoding="utf-8" address="192.168.10.13" port="33" protocol="HTTP/1.1" 
+    <Connector URIEncoding="utf-8" address="192.168.10.10" port="33" protocol="HTTP/1.1" 
       acceptCount="500"
       useBodyEncodingForURI="true"
       connectionUploadTimeout="36000000" 
@@ -174,8 +174,8 @@
   
    <Service name="Portal_Execute">
     <Connector URIEncoding="utf-8" 
-               address="192.168.10.14" 
-               port="80" 
+               address="192.168.10.10" 
+               port="38" 
                protocol="HTTP/1.1"  
                acceptCount="500"
                useBodyEncodingForURI="true"
@@ -215,7 +215,7 @@
   
   <Service name="Loc_RT">
     <Connector URIEncoding="utf-8" 
-               address="192.168.10.15" 
+               address="192.168.10.10" 
                port="39" 
                protocol="HTTP/1.1"  
                acceptCount="500"
@@ -255,7 +255,7 @@
   </Service>
   <Service name="Portal_IOT">
     <Connector URIEncoding="utf-8" 
-               address="192.168.10.16" 
+               address="192.168.10.10" 
                port="40" 
                protocol="HTTP/1.1"  
                acceptCount="500"
@@ -295,7 +295,7 @@
   </Service>
   <Service name="Portal_IOT_Front">
     <Connector URIEncoding="utf-8" 
-               address="192.168.10.17" 
+               address="192.168.10.10" 
                port="41" 
                protocol="HTTP/1.1"  
                acceptCount="500"
@@ -336,7 +336,7 @@
   
   <Service name="Portal_CTSP">
     <Connector URIEncoding="utf-8" 
-               address="192.168.10.19" 
+               address="192.168.10.10" 
                port="8042" 
                protocol="HTTP/1.1"  
                acceptCount="500"

@@ -31,9 +31,12 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(java.nio.file.AccessDeniedException.class)
 	public ResponseEntity<Map<String, String>> handleAccessDenied(java.nio.file.AccessDeniedException ex) {
 		log.error("檔案權限不足: {}", ex.getFile(), ex);
+		String reason = ex.getReason();
+		String message = (reason != null && !reason.isBlank())
+				? reason
+				: "無法寫入 " + ex.getFile() + "。請以系統管理員執行 TMAM。";
 		return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-				.body(Map.of("message", "無法寫入 " + ex.getFile()
-						+ "。若 Tomcat 安裝在 Program Files，請確認 TMAM 已使用可寫入的 CATALINA_BASE（%USERPROFILE%\\.tmam\\native-tomcat）。"));
+				.body(Map.of("message", message));
 	}
 
 	@ExceptionHandler(Exception.class)

@@ -8,20 +8,32 @@ export const useTomcatInstancesStore = defineStore('tomcatInstances', () => {
   const loading = ref(false)
   const actionLoading = ref(false)
 
+  async function fetchInstances() {
+    const [listRes, statusRes] = await Promise.all([
+      tomcatsApi.list(),
+      tomcatsApi.allStatus(),
+    ])
+    instances.value = listRes.data ?? []
+    statusMap.value = statusRes.data ?? {}
+  }
+
   async function refresh() {
     loading.value = true
     try {
-      const [listRes, statusRes] = await Promise.all([
-        tomcatsApi.list(),
-        tomcatsApi.allStatus(),
-      ])
-      instances.value = listRes.data ?? []
-      statusMap.value = statusRes.data ?? {}
+      await fetchInstances()
     } catch {
       instances.value = []
       statusMap.value = {}
     } finally {
       loading.value = false
+    }
+  }
+
+  async function refreshStatus() {
+    try {
+      await fetchInstances()
+    } catch {
+      /* keep last known data */
     }
   }
 
@@ -35,6 +47,7 @@ export const useTomcatInstancesStore = defineStore('tomcatInstances', () => {
     loading,
     actionLoading,
     refresh,
+    refreshStatus,
     displayStatus,
     extractErrorMessage,
   }

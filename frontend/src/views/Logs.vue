@@ -7,13 +7,13 @@
       </div>
       <div class="logs-actions">
         <el-switch v-model="autoRefresh" active-text="自動更新" />
-        <el-select v-model="lineCount" style="width: 120px" @change="loadLogs">
+        <el-select v-model="lineCount" style="width: 120px" @change="reloadLogs">
           <el-option :value="50" label="50 行" />
           <el-option :value="100" label="100 行" />
           <el-option :value="200" label="200 行" />
           <el-option :value="500" label="500 行" />
         </el-select>
-        <el-button :loading="loading" @click="loadLogs">重新整理</el-button>
+        <el-button :loading="loading" @click="reloadLogs">重新整理</el-button>
       </div>
     </div>
 
@@ -36,6 +36,7 @@ const logBox = ref(null)
 const loadError = ref('')
 
 let pollingTimer = null
+let requestSeq = 0
 
 const logText = computed(() => {
   if (lines.value.length === 0) {
@@ -51,32 +52,43 @@ function isNearBottom(el, threshold = 80) {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
 }
 
-async function loadLogs() {
+async function loadLogs({ showLoading = false } = {}) {
   const box = logBox.value
   const stickToBottom = !box || isNearBottom(box)
+  const seq = ++requestSeq
 
-  loading.value = true
+  if (showLoading) loading.value = true
   try {
     const { data } = await instanceApi.logs(name.value, lineCount.value)
-    lines.value = Array.isArray(data) ? data : []
+    if (seq !== requestSeq) return
+    const next = Array.isArray(data) ? data : []
+    const nextText = next.join('\n')
+    const prevText = lines.value.join('\n')
     loadError.value = ''
+    if (nextText === prevText) return
+    lines.value = next
     await nextTick()
     if (logBox.value && stickToBottom) {
       logBox.value.scrollTop = logBox.value.scrollHeight
     }
   } catch {
+    if (seq !== requestSeq) return
     loadError.value = '無法載入日誌，請確認實例已建立且後端正在運行'
     if (lines.value.length === 0) {
       lines.value = [loadError.value]
     }
   } finally {
-    loading.value = false
+    if (showLoading && seq === requestSeq) loading.value = false
   }
+}
+
+function reloadLogs() {
+  return loadLogs({ showLoading: true })
 }
 
 watch(autoRefresh, (enabled) => {
   if (enabled) {
-    pollingTimer = setInterval(loadLogs, 3000)
+    pollingTimer = setInterval(() => loadLogs({ showLoading: false }), 3000)
   } else {
     clearInterval(pollingTimer)
     pollingTimer = null
@@ -84,9 +96,9 @@ watch(autoRefresh, (enabled) => {
 })
 
 onMounted(() => {
-  loadLogs()
+  reloadLogs()
   if (autoRefresh.value) {
-    pollingTimer = setInterval(loadLogs, 3000)
+    pollingTimer = setInterval(() => loadLogs({ showLoading: false }), 3000)
   }
 })
 

@@ -162,4 +162,10 @@ public class TomcatInstanceController {
 		return instanceManagementService.logs(id, lines);
 	}
 
+	@PostMapping("/{id}/open-logs-dir")
+	public ResponseEntity<Void> openLogsDir(@PathVariable String id) throws Exception {
+		instanceManagementService.openLogsDirectory(id);
+		return ResponseEntity.noContent().build();
+	}
+
 }

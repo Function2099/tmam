@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: tmam-backend
+  main:
+    banner-mode: off
+  jmx:
+    enabled: false
 
 tmam:
   mode: native
@@ -14,10 +18,12 @@ tmam:
   server-xml-backup: ${user.home}/.tmam/backups/server.xml.tmam-original
   server-xml-fragments: ${user.home}/.tmam/server-fragments
   native-catalina-base: ${user.home}/.tmam/native-tomcat
-  startup-timeout-sec: 90
+  # 0 = 不限制，等到 catalina 日誌出現 Server startup in 為止；逾時也不會強制停止 Tomcat
+  startup-timeout-sec: 0
   app-log-path: ${user.home}/.tmam/logs/tmam-backend.log
   nginx:
     enabled: true
+    auto-start: true
     # executable:  # 選填；未設定時依 NGINX_HOME、PATH 或常見安裝路徑自動偵測
     config-path: ${user.home}/.tmam/nginx/nginx.conf
     locations-fragment: ${user.home}/.tmam/nginx/tmam-locations.conf

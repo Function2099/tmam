@@ -73,16 +73,25 @@ public class PathGatewayService {
 				.append("\" port=\"").append(gatewayPort)
 				.append("\" protocol=\"HTTP/1.1\" connectionTimeout=\"20000\" />\n");
 		xml.append("    <Engine name=\"").append(escapeXml(serviceName))
-				.append("\" defaultHost=\"").append(escapeXml(serviceName)).append("\">\n");
+				.append("\" defaultHost=\"localhost\">\n");
 		xml.append("      <Realm className=\"org.apache.catalina.realm.UserDatabaseRealm\" resourceName=\"UserDatabase\" />\n");
-		xml.append("      <Host name=\"").append(escapeXml(serviceName))
-				.append("\" unpackWARs=\"true\" autoDeploy=\"true\">\n");
+		xml.append("      <Host name=\"localhost\" unpackWARs=\"false\" autoDeploy=\"false\" deployOnStartup=\"false\" startStopThreads=\"")
+				.append(TomcatStartupOptimizer.START_STOP_THREADS).append("\">\n");
+		xml.append("        <Alias>127.0.0.1</Alias>\n");
 
 		for (TomcatServiceConfig service : enabledServices) {
 			String contextPath = PathProxyValidator.contextPathForTomcat(service.getPathPrefix());
 			xml.append("        <Context path=\"").append(escapeXml(contextPath))
 					.append("\" docBase=\"").append(escapeXml(service.getDocBase()))
-					.append("\" reloadable=\"true\" crossContext=\"true\" />\n");
+					.append("\" sessionCookiePath=\"/\" reloadable=\"true\" crossContext=\"true\">\n");
+			xml.append("          <Parameter name=\"tmam.online\" value=\"")
+					.append(service.isOnline() ? "true" : "false")
+					.append("\" override=\"false\"/>\n");
+			xml.append("          <Parameter name=\"WebPath\" value=\"")
+					.append(escapeXml(contextPath))
+					.append("\" override=\"true\"/>\n");
+			xml.append("          ").append(TomcatStartupOptimizer.JAR_SCANNER).append("\n");
+			xml.append("        </Context>\n");
 		}
 
 		xml.append("      </Host>\n");
@@ -92,6 +101,9 @@ public class PathGatewayService {
 	}
 
 	private String escapeXml(String value) {
+		if (value == null) {
+			return "";
+		}
 		return value.replace("&", "&amp;")
 				.replace("\"", "&quot;")
 				.replace("<", "&lt;")

@@ -5,6 +5,9 @@ const api = axios.create({
   timeout: 120000,
 })
 
+/** 啟停 Tomcat 可能超過數分鐘，不設 HTTP 逾時以免前端先斷線。 */
+const longOp = { timeout: 0 }
+
 export function extractErrorMessage(error) {
   const data = error?.response?.data
   if (typeof data === 'string') return data
@@ -26,14 +29,15 @@ export const tomcatsApi = {
   updateService: (id, name, payload) => api.put(`/tomcats/${id}/services/${name}`, payload),
   deleteService: (id, name) => api.delete(`/tomcats/${id}/services/${name}`),
   updateEnabled: (id, enabledByName) => api.put(`/tomcats/${id}/services/enabled`, enabledByName),
-  start: (id) => api.post(`/tomcats/${id}/start`),
-  stop: (id) => api.post(`/tomcats/${id}/stop`),
-  restart: (id) => api.post(`/tomcats/${id}/restart`),
-  apply: (id) => api.post(`/tomcats/${id}/apply`),
-  toggle: (id, name) => api.post(`/tomcats/${id}/services/${name}/toggle`),
+  start: (id) => api.post(`/tomcats/${id}/start`, null, longOp),
+  stop: (id) => api.post(`/tomcats/${id}/stop`, null, longOp),
+  restart: (id) => api.post(`/tomcats/${id}/restart`, null, longOp),
+  apply: (id) => api.post(`/tomcats/${id}/apply`, null, longOp),
+  toggle: (id, name) => api.post(`/tomcats/${id}/services/${name}/toggle`, null, longOp),
   import: (id) => api.post(`/tomcats/${id}/import`),
   restoreOriginal: (id) => api.post(`/tomcats/${id}/restore-original`),
   logs: (id, lines = 100) => api.get(`/tomcats/${id}/logs`, { params: { lines } }),
+  openLogsDir: (id) => api.post(`/tomcats/${id}/open-logs-dir`),
 }
 
 /** 向後相容：委派至 default 實例 */
@@ -46,11 +50,11 @@ export const tomcatApi = {
   updateService: (name, payload) => api.put(`/tomcat/services/${name}`, payload),
   deleteService: (name) => api.delete(`/tomcat/services/${name}`),
   updateEnabled: (enabledByName) => api.put('/tomcat/services/enabled', enabledByName),
-  start: () => api.post('/tomcat/start'),
-  stop: () => api.post('/tomcat/stop'),
-  restart: () => api.post('/tomcat/restart'),
-  apply: () => api.post('/tomcat/apply'),
-  toggle: (name) => api.post(`/tomcat/services/${name}/toggle`),
+  start: () => api.post('/tomcat/start', null, longOp),
+  stop: () => api.post('/tomcat/stop', null, longOp),
+  restart: () => api.post('/tomcat/restart', null, longOp),
+  apply: () => api.post('/tomcat/apply', null, longOp),
+  toggle: (name) => api.post(`/tomcat/services/${name}/toggle`, null, longOp),
   import: () => api.post('/tomcat/import'),
   restoreOriginal: () => api.post('/tomcat/restore-original'),
   logs: (lines = 100) => api.get('/tomcat/logs', { params: { lines } }),
@@ -71,9 +75,9 @@ export const projectApi = {
 }
 
 export const instanceApi = {
-  start: (name) => api.post(`/instances/${name}/start`),
-  stop: (name) => api.post(`/instances/${name}/stop`),
-  restart: (name) => api.post(`/instances/${name}/restart`),
+  start: (name) => api.post(`/instances/${name}/start`, null, longOp),
+  stop: (name) => api.post(`/instances/${name}/stop`, null, longOp),
+  restart: (name) => api.post(`/instances/${name}/restart`, null, longOp),
   status: (name) => api.get(`/instances/${name}/status`),
   allStatus: () => api.get('/instances/status'),
   logs: (name, lines = 100) => api.get(`/instances/${name}/logs`, { params: { lines } }),

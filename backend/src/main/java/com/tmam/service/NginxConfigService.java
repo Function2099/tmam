@@ -1,10 +1,17 @@
 package com.tmam.service;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -108,18 +115,25 @@ public class NginxConfigService {
 		log.info("[writeConfig] 已寫入 location 片段 {}", locationsFragment);
 
 		Files.createDirectories(configPath.getParent());
-		Files.writeString(configPath, buildMainConfig());
+		Files.writeString(configPath, buildMainConfig(buildContextMaps(config)));
 		log.info("[writeConfig] 已寫入主設定 {}", configPath);
 	}
 
 	String buildLocationsFragment(TmamConfig config) {
 		List<String> blocks = new ArrayList<>();
+		Map<String, List<LegacyTarget>> legacyByKey = new LinkedHashMap<>();
 		for (TomcatInstanceConfig instance : config.getTomcatInstances().values()) {
 			List<TomcatServiceConfig> pathProxies = instance.getServices().values().stream()
 					.filter(service -> service.getType() == TomcatServiceType.PATH_PROXY && service.isEnabled())
 					.collect(Collectors.toList());
 			for (TomcatServiceConfig service : pathProxies) {
 				blocks.add(buildLocationBlock(service, instance.getGatewayPort()));
+				String origin = upstreamOrigin(service, instance.getGatewayPort());
+				for (String legacyPath : PathProxyValidator.normalizeLegacyPaths(service.getLegacyPaths())) {
+					String key = legacyPath.toLowerCase(Locale.ROOT);
+					legacyByKey.computeIfAbsent(key, ignored -> new ArrayList<>())
+							.add(new LegacyTarget(legacyPath, origin, isLegacyFilePath(legacyPath)));
+				}
 			}
 		}
 
@@ -131,25 +145,133 @@ public class NginxConfigService {
 		for (String block : blocks) {
 			content.append(block).append('\n');
 		}
+		for (List<LegacyTarget> targets : legacyByKey.values()) {
+			content.append('\n').append(buildLegacyLocation(targets)).append('\n');
+		}
 		return content.toString();
 	}
+
+	private static final String PROXY_HEADERS = """
+			    proxy_set_header Host $host;
+			    proxy_set_header X-Real-IP $remote_addr;
+			    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+			    proxy_set_header X-Forwarded-Proto $scheme;
+			    proxy_hide_header Strict-Transport-Security;""";
 
 	private String buildLocationBlock(TomcatServiceConfig service, int gatewayPort) {
 		String locationPrefix = PathProxyValidator.nginxLocationPrefix(service.getPathPrefix());
 		String contextPath = PathProxyValidator.contextPathForTomcat(service.getPathPrefix());
-		String upstreamBase = "http://" + upstreamHost + ":" + gatewayPort;
-		String proxyPass = service.isProxyStripPrefix()
-				? upstreamBase + "/"
-				: upstreamBase + contextPath + "/";
+		String upstreamContext = upstreamOrigin(service, gatewayPort);
+		String proxyPass = upstreamContext + "/";
 
-		return """
-				location %s {
-				    proxy_pass %s;
-				    proxy_set_header Host $host;
-				    proxy_set_header X-Real-IP $remote_addr;
-				    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-				    proxy_set_header X-Forwarded-Proto $scheme;
-				}""".formatted(locationPrefix, proxyPass);
+		StringBuilder block = new StringBuilder();
+		block.append("location ").append(locationPrefix).append(" {\n");
+		block.append("    proxy_pass ").append(proxyPass).append(";\n");
+		block.append(PROXY_HEADERS).append('\n');
+		block.append("    add_header Set-Cookie \"tmam_ctx=").append(contextPath)
+				.append("; Path=/; SameSite=Lax\" always;\n");
+		block.append("    proxy_connect_timeout 60s;\n");
+		block.append("    proxy_read_timeout 300s;\n");
+		if (!service.isProxyStripPrefix()) {
+			appendLegacyRedirects(block, service, contextPath);
+		}
+		block.append("}\n");
+		block.append("location = ").append(contextPath).append(" {\n");
+		block.append("    return 301 ").append(locationPrefix).append(";\n");
+		block.append('}');
+		String indexPage = PathProxyValidator.normalizeIndexPage(service.getIndexPage());
+		if (!indexPage.isBlank()) {
+			block.append("\nlocation = ").append(locationPrefix).append(" {\n");
+			block.append("    return 302 ").append(locationPrefix).append(indexPage).append("$is_args$args;\n");
+			block.append('}');
+		}
+		return block.toString();
+	}
+
+	private static void appendLegacyRedirects(StringBuilder block, TomcatServiceConfig service, String contextPath) {
+		for (String legacyPath : PathProxyValidator.normalizeLegacyPaths(service.getLegacyPaths())) {
+			if (isLegacyFilePath(legacyPath)) {
+				block.append("    proxy_redirect ").append(legacyPath).append(" ")
+						.append(contextPath).append(legacyPath).append(";\n");
+			}
+			else {
+				block.append("    proxy_redirect ").append(legacyPath).append("/ ")
+						.append(contextPath).append(legacyPath).append("/;\n");
+			}
+		}
+	}
+
+	private String buildLegacyLocation(List<LegacyTarget> targets) {
+		LegacyTarget first = targets.get(0);
+		StringBuilder block = new StringBuilder();
+		if (first.file()) {
+			block.append("location = ").append(first.path()).append(" {\n");
+		}
+		else {
+			block.append("location ").append(first.path()).append("/ {\n");
+		}
+		block.append("    if ($tmam_ctx = \"\") { return 404; }\n");
+		block.append("    return 302 $tmam_ctx$request_uri;\n");
+		block.append('}');
+		return block.toString();
+	}
+
+	private String upstreamOrigin(TomcatServiceConfig service, int gatewayPort) {
+		String base = "http://" + upstreamHost + ":" + gatewayPort;
+		if (service.isProxyStripPrefix()) {
+			return base;
+		}
+		return base + PathProxyValidator.contextPathForTomcat(service.getPathPrefix());
+	}
+
+	String buildContextMaps(TmamConfig config) {
+		List<String> prefixes = new ArrayList<>();
+		for (TomcatInstanceConfig instance : config.getTomcatInstances().values()) {
+			for (TomcatServiceConfig service : instance.getServices().values()) {
+				if (service.getType() != TomcatServiceType.PATH_PROXY || !service.isEnabled()) {
+					continue;
+				}
+				prefixes.add(PathProxyValidator.contextPathForTomcat(service.getPathPrefix()));
+			}
+		}
+		prefixes.sort(Comparator.comparingInt(String::length).reversed());
+		StringBuilder map = new StringBuilder();
+		map.append("    map $http_referer $tmam_ctx_from_referer {\n");
+		map.append("        default \"\";\n");
+		for (String prefix : prefixes) {
+			map.append("        ~*").append(prefix).append("(/|\\?|$) ")
+					.append(prefix).append(";\n");
+		}
+		map.append("    }\n");
+		map.append("    map $cookie_tmam_ctx $tmam_ctx {\n");
+		map.append("        \"\" $tmam_ctx_from_referer;\n");
+		for (String prefix : prefixes) {
+			map.append("        ").append(prefix).append(" ").append(prefix).append(";\n");
+		}
+		map.append("        default $tmam_ctx_from_referer;\n");
+		map.append("    }\n");
+		return map.toString();
+	}
+
+	private record LegacyTarget(String path, String origin, boolean file) {
+	}
+
+	/**
+	 * Nginx 在 Windows 上 location 不分大小寫，/error 與 /Error 會變成 duplicate location。
+	 */
+	static boolean claimLegacyPath(Set<String> claimed, String path) {
+		for (String existing : claimed) {
+			if (existing.equalsIgnoreCase(path)) {
+				return false;
+			}
+		}
+		return claimed.add(path);
+	}
+
+	static boolean isLegacyFilePath(String path) {
+		int slash = path.lastIndexOf('/');
+		String name = slash >= 0 ? path.substring(slash + 1) : path;
+		return name.indexOf('.') >= 0;
 	}
 
 	private Path nginxHome() {
@@ -160,11 +282,16 @@ public class NginxConfigService {
 		return nginxHome().resolve("conf/mime.types");
 	}
 
-	private String buildMainConfig() {
+	private String buildMainConfig(String refererMap) {
 		String includePath = locationsFragment.toAbsolutePath().toString().replace("\\", "/");
 		String mimeTypes = mimeTypesPath().toString().replace("\\", "/");
+		Path nginxDir = configPath.toAbsolutePath().getParent();
+		String pidPath = nginxDir.resolve("nginx.pid").toString().replace("\\", "/");
+		String errorLog = nginxDir.resolve("error.log").toString().replace("\\", "/");
 		return """
 				worker_processes  1;
+				pid %s;
+				error_log %s;
 
 				events {
 				    worker_connections  1024;
@@ -175,15 +302,32 @@ public class NginxConfigService {
 				    default_type  application/octet-stream;
 				    sendfile        on;
 				    keepalive_timeout  65;
-
+				    absolute_redirect off;
+				%s
 				    server {
 				        listen %d;
 				        server_name localhost;
 
 				        include %s;
+
+				        location / {
+				            default_type text/plain;
+				            charset utf-8;
+				            return 404 'TMAM: 沒有對應的路徑型系統。請使用 http://主機/路徑前綴/\\n';
+				        }
 				    }
 				}
-				""".formatted(mimeTypes, listenPort, includePath);
+				""".formatted(pidPath, errorLog, mimeTypes, refererMap, listenPort, includePath);
+	}
+
+	public boolean isListening() {
+		try (Socket socket = new Socket()) {
+			socket.connect(new InetSocketAddress("127.0.0.1", listenPort), 500);
+			return true;
+		}
+		catch (IOException ex) {
+			return false;
+		}
 	}
 
 	public void testConfig() throws IOException, InterruptedException {
@@ -191,6 +335,10 @@ public class NginxConfigService {
 	}
 
 	public void start() throws IOException, InterruptedException {
+		if (isListening()) {
+			log.warn("[start] :{} 仍被占用，可能不是 TMAM 的 Nginx", listenPort);
+			return;
+		}
 		List<String> command = new ArrayList<>();
 		command.add(Path.of(executable).toAbsolutePath().toString());
 		command.add("-c");
@@ -199,9 +347,16 @@ public class NginxConfigService {
 		ProcessBuilder processBuilder = new ProcessBuilder(command);
 		processBuilder.directory(nginxHome().toFile());
 		processBuilder.redirectErrorStream(true);
-		processBuilder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
-		processBuilder.start();
-		Thread.sleep(1000);
+		Process process = processBuilder.start();
+		if (waitUntilListening(4000)) {
+			return;
+		}
+		String output = "";
+		if (!process.isAlive()) {
+			output = new String(process.getInputStream().readAllBytes()).trim();
+		}
+		throw new IOException("Nginx 啟動後仍未監聽 :" + listenPort
+				+ (output.isBlank() ? "" : " — " + output));
 	}
 
 	public void reload() throws IOException, InterruptedException {
@@ -209,13 +364,89 @@ public class NginxConfigService {
 	}
 
 	public void reloadOrStart() throws IOException, InterruptedException {
+		stopQuietly();
+		start();
+	}
+
+	/**
+	 * Windows 上 port 80 可被多個 nginx master 同時占用；只 reload 會留下舊行程，
+	 * 請求落到預設 conf 就會出現 Welcome to nginx。套用前先停乾淨再啟動。
+	 */
+	void stopQuietly() {
+		if (!isAvailable()) {
+			return;
+		}
 		try {
-			reload();
+			runNginx("-s", "quit", "-c", configPath.toAbsolutePath().toString());
 		}
-		catch (IOException ex) {
-			log.info("[reloadOrStart] reload 失敗，改為啟動 Nginx: {}", ex.getMessage());
-			start();
+		catch (Exception ex) {
+			log.debug("[stopQuietly] quit (tmam config): {}", ex.getMessage());
 		}
+		try {
+			ProcessBuilder processBuilder = new ProcessBuilder(
+					Path.of(executable).toAbsolutePath().toString(), "-s", "quit");
+			processBuilder.directory(nginxHome().toFile());
+			processBuilder.redirectErrorStream(true);
+			Process process = processBuilder.start();
+			if (!process.waitFor(10, TimeUnit.SECONDS)) {
+				process.destroyForcibly();
+			}
+		}
+		catch (Exception ex) {
+			log.debug("[stopQuietly] quit (install prefix): {}", ex.getMessage());
+		}
+		waitUntilNotListening(3000);
+		if (isListening()) {
+			forceStopNginxProcesses();
+			waitUntilNotListening(4000);
+		}
+	}
+
+	private void forceStopNginxProcesses() {
+		String os = System.getProperty("os.name", "").toLowerCase();
+		if (!os.contains("win")) {
+			return;
+		}
+		try {
+			log.warn("[stopQuietly] :{} 仍被占用，強制結束 nginx.exe", listenPort);
+			ProcessBuilder processBuilder = new ProcessBuilder("taskkill", "/F", "/IM", "nginx.exe");
+			processBuilder.redirectErrorStream(true);
+			Process process = processBuilder.start();
+			if (!process.waitFor(10, TimeUnit.SECONDS)) {
+				process.destroyForcibly();
+			}
+		}
+		catch (Exception ex) {
+			log.debug("[stopQuietly] taskkill: {}", ex.getMessage());
+		}
+	}
+
+	private boolean waitUntilNotListening(int timeoutMs) {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			if (!isListening()) {
+				return true;
+			}
+			try {
+				Thread.sleep(200);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				return !isListening();
+			}
+		}
+		return !isListening();
+	}
+
+	private boolean waitUntilListening(int timeoutMs) throws InterruptedException {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			if (isListening()) {
+				return true;
+			}
+			Thread.sleep(200);
+		}
+		return isListening();
 	}
 
 	public void apply(TmamConfig config) throws IOException, InterruptedException {

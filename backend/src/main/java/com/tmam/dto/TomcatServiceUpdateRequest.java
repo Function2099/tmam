@@ -1,5 +1,7 @@
 package com.tmam.dto;
 
+import java.util.List;
+
 public record TomcatServiceUpdateRequest(
 		String displayName,
 		String pathPrefix,
@@ -7,5 +9,8 @@ public record TomcatServiceUpdateRequest(
 		String address,
 		Integer port,
 		Boolean enabled,
-		Boolean proxyStripPrefix) {
+		Boolean proxyStripPrefix,
+		Boolean online,
+		List<String> legacyPaths,
+		String indexPage) {
 }

@@ -1,5 +1,8 @@
 package com.tmam.model;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
@@ -15,6 +18,12 @@ public class TomcatServiceConfig {
 	private String pathPrefix;
 	private String docBase;
 	private boolean proxyStripPrefix = false;
+	/** Nginx 將根路徑的子資料夾轉到本系統前綴下（例如 /images → /Web/images）。 */
+	private List<String> legacyPaths = new ArrayList<>();
+	/** 造訪前綴根路徑時導向的首頁（例如 index_Login.jsp）。空白則維持轉發目錄本身。 */
+	private String indexPage;
+	/** 上線模式：應用可依此決定是否強制 HTTPS 等正式環境行為；本機測試請關閉。 */
+	private boolean online = false;
 	private boolean userCreated = false;
 
 	public String getName() {
@@ -87,6 +96,30 @@ public class TomcatServiceConfig {
 
 	public void setProxyStripPrefix(boolean proxyStripPrefix) {
 		this.proxyStripPrefix = proxyStripPrefix;
+	}
+
+	public List<String> getLegacyPaths() {
+		return legacyPaths;
+	}
+
+	public void setLegacyPaths(List<String> legacyPaths) {
+		this.legacyPaths = legacyPaths != null ? legacyPaths : new ArrayList<>();
+	}
+
+	public String getIndexPage() {
+		return indexPage;
+	}
+
+	public void setIndexPage(String indexPage) {
+		this.indexPage = indexPage;
+	}
+
+	public boolean isOnline() {
+		return online;
+	}
+
+	public void setOnline(boolean online) {
+		this.online = online;
 	}
 
 	public boolean isUserCreated() {
